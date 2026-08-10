@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://open-seo-crawler.dev/schema/scanner-result-1.4.json",
+  "$id": "https://open-seo-crawler.dev/schema/scanner-result-1.5.json",
   "title": "Open SEO Scanner result",
   "type": "object",
-  "required": ["schema_version", "start_url", "started_at", "finished_at", "status", "pages", "resources", "edges", "issues", "errors", "coverage", "sitemaps"],
+  "required": ["schema_version", "start_url", "started_at", "finished_at", "status", "pages", "resources", "edges", "issues", "errors", "coverage", "sitemaps", "external_links"],
   "properties": {
-    "schema_version": {"const": "1.4"},
+    "schema_version": {"const": "1.5"},
     "start_url": {"type": "string", "format": "uri"},
     "started_at": {"type": "string", "format": "date-time"},
     "finished_at": {"type": "string", "format": "date-time"},
@@ -16,7 +16,8 @@
     "issues": {"type": "array", "items": {"$ref": "#/$defs/issue"}},
     "errors": {"type": "array", "items": {"type": "string"}},
     "coverage": {"$ref": "#/$defs/coverage"},
-    "sitemaps": {"type": "array", "items": {"$ref": "#/$defs/sitemap"}}
+    "sitemaps": {"type": "array", "items": {"$ref": "#/$defs/sitemap"}},
+    "external_links": {"type": "array", "items": {"$ref": "#/$defs/external_link"}}
   },
   "additionalProperties": false,
   "$defs": {
@@ -60,11 +61,12 @@
       }, "additionalProperties": false
     },
     "coverage": {
-      "type": "object", "required": ["pages_fetched", "pages_queued", "resources_discovered", "resources_fetched", "bytes_downloaded", "complete", "limit_reason", "sitemaps_fetched", "sitemap_urls_discovered"],
+      "type": "object", "required": ["pages_fetched", "pages_queued", "resources_discovered", "resources_fetched", "bytes_downloaded", "complete", "limit_reason", "sitemaps_fetched", "sitemap_urls_discovered", "external_links_discovered", "external_links_checked"],
       "properties": {
         "pages_fetched": {"type": "integer"}, "pages_queued": {"type": "integer"}, "resources_discovered": {"type": "integer"},
         "resources_fetched": {"type": "integer"}, "bytes_downloaded": {"type": "integer"}, "complete": {"type": "boolean"},
-        "limit_reason": {"type": ["string", "null"]}, "sitemaps_fetched": {"type": "integer"}, "sitemap_urls_discovered": {"type": "integer"}
+        "limit_reason": {"type": ["string", "null"]}, "sitemaps_fetched": {"type": "integer"}, "sitemap_urls_discovered": {"type": "integer"},
+        "external_links_discovered": {"type": "integer"}, "external_links_checked": {"type": "integer"}
       }, "additionalProperties": false
     },
     "sitemap": {
@@ -73,6 +75,14 @@
         "url": {"type": "string"}, "status": {"type": ["integer", "null"]}, "kind": {"type": "string"},
         "urls": {"type": "array", "items": {"type": "string"}}, "child_sitemaps": {"type": "array", "items": {"type": "string"}},
         "errors": {"type": "array", "items": {"type": "string"}}
+      }, "additionalProperties": false
+    },
+    "external_link": {
+      "type": "object", "required": ["url", "final_url", "status", "redirect_hops", "referring_urls", "error"],
+      "properties": {
+        "url": {"type": "string"}, "final_url": {"type": "string"}, "status": {"type": ["integer", "null"]},
+        "redirect_hops": {"type": "array", "items": {"type": "string"}},
+        "referring_urls": {"type": "array", "items": {"type": "string"}}, "error": {"type": "string"}
       }, "additionalProperties": false
     }
   }

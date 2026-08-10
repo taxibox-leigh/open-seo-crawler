@@ -19,7 +19,7 @@ from .analyzers.sitemap import parse_sitemap, sitemap_locations_from_robots
 from .analyzers.hreflang import analyze_hreflang
 from .discovery import DiscoveredResource, discover_css, discover_html
 from .fetch import Fetcher, FetchResponse
-from .models import Coverage, CrawlResult, Edge, Issue, Page, Resource, SitemapDocument
+from .models import Coverage, CrawlResult, Edge, ExternalLinkTarget, Issue, Page, Resource, SitemapDocument
 from .rules import get_rule
 from .scope import normalize_url, same_origin
 
@@ -56,6 +56,8 @@ class Scanner:
                     if same_origin(start, sitemap_page) and sitemap_page not in state.page_queue:
                         state.page_queue.append(sitemap_page)
             self._crawl_pages(fetcher, state)
+            if self.config.validate_external_links:
+                self._check_external_links(fetcher, state)
             self._crawl_resources(fetcher, state)
 
         result.edges = sorted(state.edges, key=lambda edge: (edge.source_url, edge.target_url, edge.context))
@@ -162,6 +164,37 @@ class Scanner:
             if total_bytes_truncated:
                 self._set_limit(state.result, "max_total_bytes")
                 return
+
+    def _check_external_links(self, fetcher: Fetcher, state: _RunState) -> None:
+        targets = sorted({edge.target_url for edge in state.edges if edge.context == "a.href" and not same_origin(state.start_url, edge.target_url)})
+        state.result.coverage.external_links_discovered = len(targets)
+        last_request_by_host: dict[str, float] = {}
+        for url in targets[:self.config.max_external_links]:
+            if self._limit(state.result, state.deadline, state.result.coverage.bytes_downloaded >= self.config.max_total_bytes, "max_total_bytes"):
+                return
+            host = urlsplit(url).netloc.lower()
+            elapsed = time.monotonic() - last_request_by_host.get(host, 0.0)
+            if host in last_request_by_host and elapsed < self.config.external_delay_seconds:
+                time.sleep(self.config.external_delay_seconds - elapsed)
+            try:
+                response = fetcher.head(url)
+                if response.status in {403, 405, 501}:
+                    response = fetcher.get(url, min(self.config.max_link_bytes, self._remaining_bytes(state.result)))
+                    state.result.coverage.bytes_downloaded += len(response.body)
+            except requests.RequestException as exc:
+                state.result.external_links.append(ExternalLinkTarget(url=url, referring_urls=_root_referrers(url, state.edges), error=str(exc)))
+                state.result.issues.append(self._issue("external_link.fetch_failed", "external_link", url, str(exc), state.edges))
+                last_request_by_host[host] = time.monotonic()
+                continue
+            last_request_by_host[host] = time.monotonic()
+            state.result.coverage.external_links_checked += 1
+            state.result.external_links.append(ExternalLinkTarget(url, response.final_url, response.status, response.redirect_hops, _root_referrers(url, state.edges)))
+            if response.status >= 400:
+                state.result.issues.append(self._issue("external_link.http_error", "external_link", url, f"External target returns HTTP {response.status}", state.edges, {"status": response.status}))
+            if response.redirect_hops:
+                state.result.issues.append(self._issue("external_link.redirect", "external_link", url, f"External target redirects to {response.final_url}", state.edges, {"hops": response.redirect_hops}))
+        if len(targets) > self.config.max_external_links:
+            self._set_limit(state.result, "max_external_links")
 
     def _crawl_sitemaps(self, fetcher: Fetcher, result: CrawlResult, start_url: str, deadline: float) -> list[str]:
         robots_url = normalize_url(start_url, "/robots.txt")

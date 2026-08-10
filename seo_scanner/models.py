@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-SCHEMA_VERSION = "1.4"
+SCHEMA_VERSION = "1.5"
 
 
 @dataclass(frozen=True)
@@ -82,6 +82,8 @@ class Coverage:
     limit_reason: str | None = None
     sitemaps_fetched: int = 0
     sitemap_urls_discovered: int = 0
+    external_links_discovered: int = 0
+    external_links_checked: int = 0
 
 
 @dataclass
@@ -92,6 +94,16 @@ class SitemapDocument:
     urls: list[str] = field(default_factory=list)
     child_sitemaps: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ExternalLinkTarget:
+    url: str
+    final_url: str = ""
+    status: int | None = None
+    redirect_hops: list[str] = field(default_factory=list)
+    referring_urls: list[str] = field(default_factory=list)
+    error: str = ""
 
 
 @dataclass
@@ -108,6 +120,7 @@ class CrawlResult:
     errors: list[str] = field(default_factory=list)
     coverage: Coverage = field(default_factory=Coverage)
     sitemaps: list[SitemapDocument] = field(default_factory=list)
+    external_links: list[ExternalLinkTarget] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

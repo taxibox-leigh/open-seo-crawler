@@ -399,6 +399,11 @@ also flags invalid or oversized images, duplicate payloads, mixed content, weak
 caching and missing transfer compression. Use `--resource-csv resources.csv` for
 a flat, size-sorted asset inventory alongside the JSON result.
 
+External destination checking is optional (`validate_external_links`) and uses
+HEAD with a bounded GET fallback for servers that reject HEAD. It has an
+independent target cap, per-host delay, coverage counters and referring-page
+evidence, so enabling it remains explicit and bounded.
+
 The scanner also validates every discovered same-origin link and canonical target.
 It reports broken or redirecting internal links with referring-page attribution,
 canonical errors/chains/loops, noindex/canonical conflicts, invalid robots tokens,

@@ -19,16 +19,21 @@ from seo_scanner.scope import normalize_url
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
+    external_url = ""
+    external_url_2 = ""
+
     def do_GET(self) -> None:
         base = f"http://{self.headers['Host']}"
+        external_anchor = f'<a href="{self.external_url}">external</a>' if self.external_url else ""
+        external_anchor += f'<a href="{self.external_url_2}">external 2</a>' if self.external_url_2 else ""
         routes = {
             "/robots.txt": (200, "text/plain", f"User-agent: *\nSitemap: {base}/sitemap.xml\n".encode(), {}),
             "/sitemap.xml": (200, "application/xml", f'''<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><sitemap><loc>{base}/sitemap-pages.xml</loc></sitemap><sitemap><loc>{base}/sitemap-duplicate.xml</loc></sitemap></sitemapindex>'''.encode(), {}),
             "/sitemap-pages.xml": (200, "application/xml", f'''<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>{base}/</loc></url><url><loc>{base}/page-2</loc><lastmod>not-a-date</lastmod></url><url><loc>{base}/missing-page</loc></url></urlset>'''.encode(), {}),
             "/sitemap-duplicate.xml": (200, "application/xml", f'''<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>{base}/</loc></url></urlset>'''.encode(), {}),
-            "/": (200, "text/html", b'''<title>Fixture</title><link rel="canonical" href="/"><link rel="alternate" hreflang="en-AU" href="/"><link rel="alternate" hreflang="en-AU" href="/page-2"><link rel="alternate" hreflang="en_AU" href="/missing-page"><a href="/page-2">next</a><a href="/missing-page">missing</a>
-                <img src="/broken.png"><img srcset="/small.webp 1x, /large.webp 2x">
-                <script src="/wrong.js"></script><link rel="stylesheet" href="/style.css">''', {}),
+            "/": (200, "text/html", f'''<title>Fixture</title><link rel="canonical" href="/"><link rel="alternate" hreflang="en-AU" href="/"><link rel="alternate" hreflang="en-AU" href="/page-2"><link rel="alternate" hreflang="en_AU" href="/missing-page"><a href="/page-2">next</a><a href="/missing-page">missing</a>
+                {external_anchor}<img src="/broken.png"><img srcset="/small.webp 1x, /large.webp 2x">
+                <script src="/wrong.js"></script><link rel="stylesheet" href="/style.css">'''.encode(), {}),
             "/page-2": (200, "text/html", b'<meta name="robots" content="noindex, nonsense"><link rel="canonical" href="/canonical-hop"><link rel="alternate" hreflang="en-AU" href="/"><script type="application/ld+json">{"broken":}</script><img src="/redirect.png">', {}),
             "/canonical-hop": (302, "text/plain", b"", {"Location": "/canonical-final"}),
             "/canonical-final": (200, "text/html", b'<link rel="canonical" href="/page-2">', {}),
@@ -170,9 +175,35 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.4")
+        self.assertEqual(report["schema_version"], "1.5")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
+
+    def test_optional_external_link_validation_with_get_fallback(self) -> None:
+        with FixtureServer() as external_url, FixtureServer() as url:
+            FixtureHandler.external_url = external_url + "external-broken"
+            try:
+                result = Scanner(ScannerConfig(validate_external_links=True, external_delay_seconds=0)).scan(url)
+            finally:
+                FixtureHandler.external_url = ""
+        self.assertEqual(result.coverage.external_links_discovered, 1)
+        self.assertEqual(result.coverage.external_links_checked, 1)
+        issue = next(item for item in result.issues if item.rule_id == "external_link.http_error")
+        self.assertEqual(issue.referring_urls, [url])
+
+    def test_external_link_cap_emits_partial_coverage(self) -> None:
+        with FixtureServer() as external_url, FixtureServer() as url:
+            FixtureHandler.external_url = external_url + "one"
+            FixtureHandler.external_url_2 = external_url + "two"
+            try:
+                result = Scanner(ScannerConfig(validate_external_links=True, max_external_links=1, external_delay_seconds=0)).scan(url)
+            finally:
+                FixtureHandler.external_url = ""
+                FixtureHandler.external_url_2 = ""
+        self.assertEqual(result.status, "partial")
+        self.assertEqual(result.coverage.limit_reason, "max_external_links")
+        self.assertEqual(result.coverage.external_links_discovered, 2)
+        self.assertEqual(result.coverage.external_links_checked, 1)
 
 
 if __name__ == "__main__":
