@@ -58,6 +58,9 @@ RULES = {
         Rule("hreflang.target_redirect", "Hreflang target redirects", "error", "Point hreflang directly to the final canonical URL."),
         Rule("hreflang.target_noindex", "Hreflang target is noindex", "error", "Use an indexable alternate target or remove it from the cluster."),
         Rule("hreflang.target_noncanonical", "Hreflang target canonicalizes elsewhere", "warning", "Point hreflang to the target's canonical URL."),
+        Rule("external_link.fetch_failed", "External link could not be checked", "warning", "Verify the destination manually or update/remove the link."),
+        Rule("external_link.http_error", "External link target returns an HTTP error", "warning", "Update or remove the external link."),
+        Rule("external_link.redirect", "External link target redirects", "info", "Link directly to the final destination where practical."),
     )
 }
 

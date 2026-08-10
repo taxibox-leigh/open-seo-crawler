@@ -61,6 +61,19 @@ class Fetcher:
                 headers={key.lower(): value for key, value in response.headers.items()},
             )
 
+    def head(self, url: str) -> FetchResponse:
+        started = time.monotonic()
+        with self.session.head(url, timeout=self.timeout_seconds, allow_redirects=True) as response:
+            declared = response.headers.get("Content-Length")
+            return FetchResponse(
+                requested_url=url, final_url=response.url, status=response.status_code,
+                content_type=response.headers.get("Content-Type", "").split(";", 1)[0].lower(), body=b"",
+                declared_bytes=int(declared) if declared and declared.isdigit() else None,
+                duration_ms=round((time.monotonic() - started) * 1000),
+                redirect_hops=[item.url for item in response.history] + ([response.url] if response.history else []),
+                truncated=False, headers={key.lower(): value for key, value in response.headers.items()},
+            )
+
     def close(self) -> None:
         self.session.close()
 
