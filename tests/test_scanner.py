@@ -12,10 +12,12 @@ from seo_scanner.analyzers.image import inspect_image
 from seo_scanner.analyzers.directives import extract_page_signals
 from seo_scanner.analyzers.sitemap import parse_sitemap
 from seo_scanner.analyzers.hreflang import valid_language_tag
+from seo_scanner.baseline import apply_suppressions, compare_with_baseline
 from seo_scanner.config import ScannerConfig
 from seo_scanner.discovery import discover_css, discover_html
 from seo_scanner.runner import Scanner
 from seo_scanner.scope import normalize_url
+from seo_scanner.models import Issue
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
@@ -123,6 +125,11 @@ class UnitTests(unittest.TestCase):
         self.assertFalse(valid_language_tag("en-ZZ"))
         self.assertFalse(valid_language_tag("en_AU"))
 
+    def test_issue_ids_are_stable_across_evidence_changes(self) -> None:
+        first = Issue("link.http_error", "Broken", "error", "page", "https://example.com/x", "404", {"status": 404})
+        second = Issue("link.http_error", "Broken", "error", "page", "https://example.com/x", "500", {"status": 500})
+        self.assertEqual(first.issue_id, second.issue_id)
+
     def test_config_rejects_unknown_and_nonpositive_values(self) -> None:
         with self.assertRaises(ValueError):
             ScannerConfig.from_dict({"surprise": True})
@@ -175,9 +182,23 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.5")
+        self.assertEqual(report["schema_version"], "1.6")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
+
+    def test_cli_applies_baseline_and_ignore_file(self) -> None:
+        with FixtureServer() as url, TemporaryDirectory() as directory:
+            first = Path(directory) / "first.json"
+            second = Path(directory) / "second.json"
+            ignored = Path(directory) / "ignored.json"
+            main([url, "--output", str(first), "--quiet"])
+            first_report = json.loads(first.read_text(encoding="utf-8"))
+            ignored_id = first_report["issues"][0]["issue_id"]
+            ignored.write_text(json.dumps([ignored_id]), encoding="utf-8")
+            main([url, "--output", str(second), "--baseline", str(first), "--ignore-issues", str(ignored), "--quiet"])
+            second_report = json.loads(second.read_text(encoding="utf-8"))
+        self.assertIn(ignored_id, second_report["comparison"]["suppressed_issue_ids"])
+        self.assertGreater(len(second_report["comparison"]["persistent_issue_ids"]), 0)
 
     def test_optional_external_link_validation_with_get_fallback(self) -> None:
         with FixtureServer() as external_url, FixtureServer() as url:
@@ -190,6 +211,17 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(result.coverage.external_links_checked, 1)
         issue = next(item for item in result.issues if item.rule_id == "external_link.http_error")
         self.assertEqual(issue.referring_urls, [url])
+
+    def test_baseline_comparison_and_suppression(self) -> None:
+        with FixtureServer() as url:
+            result = Scanner().scan(url)
+        baseline = result.to_dict()
+        suppressed_id = result.issues[0].issue_id
+        apply_suppressions(result, [suppressed_id])
+        comparison = compare_with_baseline(result, baseline)
+        self.assertIn(suppressed_id, comparison.suppressed_issue_ids)
+        self.assertNotIn(suppressed_id, comparison.persistent_issue_ids)
+        self.assertGreater(len(comparison.persistent_issue_ids), 0)
 
     def test_external_link_cap_emits_partial_coverage(self) -> None:
         with FixtureServer() as external_url, FixtureServer() as url:
