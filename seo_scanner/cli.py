@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .config import ScannerConfig
 from .runner import Scanner
+from .reports import write_resource_csv
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -18,6 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-resources", type=int)
     parser.add_argument("--max-duration-seconds", type=float)
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--resource-csv", type=Path, help="Optional flat resource inventory CSV")
     return parser
 
 
@@ -34,6 +36,8 @@ def main(argv: list[str] | None = None) -> int:
         result = Scanner(config, progress).scan(args.url)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
+        if args.resource_csv:
+            write_resource_csv(result, args.resource_csv)
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         print(f"open-seo-scanner: {exc}", file=sys.stderr)
         return 2

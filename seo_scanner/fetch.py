@@ -17,6 +17,7 @@ class FetchResponse:
     duration_ms: int
     redirect_hops: list[str]
     truncated: bool
+    headers: dict[str, str]
 
 
 class Fetcher:
@@ -28,6 +29,8 @@ class Fetcher:
     def get(self, url: str, max_bytes: int) -> FetchResponse:
         started = time.monotonic()
         with self.session.get(url, timeout=self.timeout_seconds, stream=True, allow_redirects=True) as response:
+            declared_header = response.headers.get("Content-Length")
+            declared = int(declared_header) if declared_header and declared_header.isdigit() else None
             chunks: list[bytes] = []
             size = 0
             truncated = False
@@ -43,19 +46,19 @@ class Fetcher:
                 chunks.append(chunk)
                 size += len(chunk)
                 if size >= max_bytes:
-                    truncated = True
+                    truncated = declared is None or declared > max_bytes
                     break
-            declared = response.headers.get("Content-Length")
             return FetchResponse(
                 requested_url=url,
                 final_url=response.url,
                 status=response.status_code,
                 content_type=response.headers.get("Content-Type", "").split(";", 1)[0].lower(),
                 body=b"".join(chunks),
-                declared_bytes=int(declared) if declared and declared.isdigit() else None,
+                declared_bytes=declared,
                 duration_ms=round((time.monotonic() - started) * 1000),
                 redirect_hops=[item.url for item in response.history] + ([response.url] if response.history else []),
                 truncated=truncated,
+                headers={key.lower(): value for key, value in response.headers.items()},
             )
 
     def close(self) -> None:

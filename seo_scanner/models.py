@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 
 @dataclass
@@ -28,6 +28,7 @@ class Page:
     bytes: int
     duration_ms: int
     title: str = ""
+    truncated: bool = False
 
 
 @dataclass
@@ -41,6 +42,14 @@ class Resource:
     duration_ms: int = 0
     redirect_hops: list[str] = field(default_factory=list)
     truncated: bool = False
+    cache_control: str = ""
+    content_encoding: str = ""
+    etag: str = ""
+    last_modified: str = ""
+    image_width: int | None = None
+    image_height: int | None = None
+    image_format: str = ""
+    content_hash: str = ""
 
 
 @dataclass(frozen=True)
