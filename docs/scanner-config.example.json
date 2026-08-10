@@ -1,0 +1,10 @@
+{
+  "max_pages": 2000,
+  "max_resources": 10000,
+  "max_total_bytes": 1000000000,
+  "max_resource_bytes": 25000000,
+  "max_resource_size": 2000000,
+  "timeout_seconds": 20,
+  "max_duration_seconds": 3600,
+  "follow_external_resources": false
+}
