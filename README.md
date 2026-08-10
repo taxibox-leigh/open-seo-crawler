@@ -391,6 +391,14 @@ coverage limits, and first-class page/resource inventories. It validates images,
 stylesheets, scripts, fonts and other HTML/CSS dependencies while retaining the
 page and discovery context that referred to each asset.
 
+Resource reports include response metadata, content hashes, cache and compression
+policy, and safe header metadata for PNG/APNG, JPEG, GIF, WebP, AVIF/HEIF, SVG,
+ICO, BMP, TIFF and JPEG XL images (including intrinsic dimensions where the
+format exposes them without full pixel decoding). The scanner
+also flags invalid or oversized images, duplicate payloads, mixed content, weak
+caching and missing transfer compression. Use `--resource-csv resources.csv` for
+a flat, size-sorted asset inventory alongside the JSON result.
+
 ```bash
 python -m seo_scanner https://example.com \
   --max-pages 2000 \

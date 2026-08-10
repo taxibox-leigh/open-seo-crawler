@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import hashlib
+import re
 from collections import deque
 from datetime import datetime, timezone
 from typing import Callable
@@ -10,6 +12,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .config import ScannerConfig
+from .analyzers.image import inspect_image
 from .discovery import DiscoveredResource, discover_css, discover_html
 from .fetch import Fetcher
 from .models import Coverage, CrawlResult, Edge, Issue, Page, Resource
@@ -53,8 +56,11 @@ class Scanner:
                     result.issues.append(self._issue("page.fetch_failed", "page", url, str(exc)))
                     continue
                 result.coverage.bytes_downloaded += len(response.body)
-                result.pages.append(Page(url, response.final_url, response.status, response.content_type, len(response.body), response.duration_ms, _title(response.body, response.content_type)))
+                result.pages.append(Page(url=url, final_url=response.final_url, status=response.status, content_type=response.content_type, bytes=len(response.body), duration_ms=response.duration_ms, title=_title(response.body, response.content_type), truncated=response.truncated))
                 result.coverage.pages_fetched += 1
+                if response.truncated:
+                    self._set_limit(result, "max_total_bytes")
+                    break
                 if response.status < 400 and response.content_type in ("text/html", "application/xhtml+xml"):
                     html = response.body.decode(_encoding(response.content_type), errors="replace")
                     links, resources, found_edges = discover_html(response.final_url, html)
@@ -77,31 +83,48 @@ class Scanner:
                     break
                 if self._limit(result, deadline, result.coverage.bytes_downloaded >= self.config.max_total_bytes, "max_total_bytes"):
                     break
-                discovered = self._fetch_resource(fetcher, result, start, url, kind, pending_resources, edges)
+                remaining_before_fetch = self._remaining_bytes(result)
+                discovered, total_bytes_truncated = self._fetch_resource(fetcher, result, start, url, kind, pending_resources, edges, remaining_before_fetch)
                 resource_queue.extend(item for item in discovered if item not in seen_resources and item not in resource_queue)
                 seen_resources.add(url)
                 self._emit(result, len(page_queue), len(pending_resources) - len(seen_resources), url)
+                if total_bytes_truncated:
+                    self._set_limit(result, "max_total_bytes")
+                    break
 
         result.edges = sorted(edges, key=lambda edge: (edge.source_url, edge.target_url, edge.context))
+        self._add_graph_issues(result, edges)
+        self._add_duplicate_issues(result, edges)
         result.coverage.pages_queued = len(page_queue)
         result.coverage.resources_discovered = len(pending_resources)
         result.finished_at = _now()
         result.status = "partial" if not result.coverage.complete else "complete"
         return result
 
-    def _fetch_resource(self, fetcher: Fetcher, result: CrawlResult, start_url: str, url: str, kind: str, pending: dict[str, str], edges: set[Edge]) -> list[str]:
+    def _fetch_resource(self, fetcher: Fetcher, result: CrawlResult, start_url: str, url: str, kind: str, pending: dict[str, str], edges: set[Edge], remaining_total_bytes: int) -> tuple[list[str], bool]:
         discovered_urls: list[str] = []
+        fetch_limit = min(self.config.max_resource_bytes, remaining_total_bytes)
         try:
-            response = fetcher.get(url, min(self.config.max_resource_bytes, self._remaining_bytes(result)))
+            response = fetcher.get(url, fetch_limit)
         except requests.RequestException as exc:
             result.resources.append(Resource(url=url, kind=kind))
             result.errors.append(f"{url}: {exc}")
             result.issues.append(self._issue("resource.fetch_failed", "resource", url, str(exc), edges))
-            return discovered_urls
+            return discovered_urls, False
         size = len(response.body)
         result.coverage.bytes_downloaded += size
         result.coverage.resources_fetched += 1
-        resource = Resource(url, response.final_url, kind, response.status, response.content_type, size, response.duration_ms, response.redirect_hops, response.truncated)
+        headers = response.headers
+        metadata = inspect_image(response.body) if kind == "image" and response.status < 400 else None
+        resource = Resource(
+            url=url, final_url=response.final_url, kind=kind, status=response.status,
+            content_type=response.content_type, bytes=size, duration_ms=response.duration_ms,
+            redirect_hops=response.redirect_hops, truncated=response.truncated,
+            cache_control=headers.get("cache-control", ""), content_encoding=headers.get("content-encoding", ""),
+            etag=headers.get("etag", ""), last_modified=headers.get("last-modified", ""),
+            image_width=metadata.width if metadata else None, image_height=metadata.height if metadata else None,
+            image_format=metadata.format if metadata else "", content_hash=hashlib.sha256(response.body).hexdigest() if response.body else "",
+        )
         result.resources.append(resource)
         if response.status >= 400:
             result.issues.append(self._issue("resource.http_error", "resource", url, f"HTTP {response.status}", edges, {"status": response.status}))
@@ -114,6 +137,16 @@ class Scanner:
             result.issues.append(self._issue("resource.oversized", "resource", url, f"Resource is {observed_size} bytes", edges, {"bytes": observed_size, "threshold": self.config.max_resource_size}))
         if response.truncated:
             result.issues.append(self._issue("resource.response_truncated", "resource", url, f"Download stopped after {size} bytes", edges, {"bytes_read": size}))
+        inspected_image_types = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/heif", "image/heic", "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon", "image/bmp", "image/tiff", "image/jxl"}
+        if kind == "image" and response.status < 400 and response.content_type in inspected_image_types and metadata is None and not response.truncated:
+            result.issues.append(self._issue("image.invalid", "resource", url, "Image dimensions could not be read from the response body", edges))
+        if metadata and ((metadata.width is not None and metadata.width > self.config.max_image_width) or (metadata.height is not None and metadata.height > self.config.max_image_height)):
+            result.issues.append(self._issue("image.oversized_dimensions", "resource", url, f"Image is {metadata.width}x{metadata.height} pixels", edges, {"width": metadata.width, "height": metadata.height, "max_width": self.config.max_image_width, "max_height": self.config.max_image_height}))
+        if size >= self.config.min_compression_bytes and _is_compressible(response.content_type) and not headers.get("content-encoding"):
+            result.issues.append(self._issue("resource.missing_compression", "resource", url, f"{size}-byte {response.content_type} response has no Content-Encoding", edges, {"bytes": size}))
+        cache_seconds = _cache_max_age(headers.get("cache-control", ""))
+        if kind in {"image", "stylesheet", "script", "font"} and response.status < 400 and (cache_seconds is None or cache_seconds < self.config.min_cache_seconds):
+            result.issues.append(self._issue("resource.weak_cache", "resource", url, "Static resource has no long-lived browser cache policy", edges, {"cache_control": headers.get("cache-control", ""), "minimum_seconds": self.config.min_cache_seconds}))
         expected = _expected_mime(kind)
         if expected and response.content_type and not any(response.content_type.startswith(item) for item in expected):
             result.issues.append(self._issue("resource.mime_mismatch", "resource", url, f"Expected {' or '.join(expected)} but received {response.content_type}", edges, {"expected": list(expected), "actual": response.content_type}))
@@ -124,17 +157,36 @@ class Scanner:
                 pending.setdefault(item.url, item.kind)
                 edges.add(Edge(url, item.url, "css.url"))
                 discovered_urls.append(item.url)
-        return discovered_urls
+        total_bytes_truncated = response.truncated and fetch_limit == remaining_total_bytes and remaining_total_bytes <= self.config.max_resource_bytes
+        return discovered_urls, total_bytes_truncated
+
+    def _add_graph_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
+        for target in sorted({edge.target_url for edge in edges if edge.source_url.startswith("https://") and edge.target_url.startswith("http://")}):
+            result.issues.append(self._issue("resource.mixed_content", "resource", target, "HTTPS page or stylesheet references an HTTP resource", edges))
+
+    def _add_duplicate_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
+        by_hash: dict[str, list[Resource]] = {}
+        for resource in result.resources:
+            if resource.content_hash and resource.status is not None and resource.status < 400:
+                by_hash.setdefault(resource.content_hash, []).append(resource)
+        for digest, resources in sorted(by_hash.items()):
+            urls = sorted({item.url for item in resources})
+            if len(urls) < 2:
+                continue
+            result.issues.append(self._issue("resource.duplicate_payload", "resource", urls[0], f"Identical content is served from {len(urls)} resource URLs", edges, {"sha256": digest, "urls": urls}))
 
     def _limit(self, result: CrawlResult, deadline: float, condition: bool, reason: str) -> bool:
         actual = "max_duration_seconds" if time.monotonic() >= deadline else reason if condition else None
         if not actual:
             return False
+        self._set_limit(result, actual)
+        return True
+
+    def _set_limit(self, result: CrawlResult, reason: str) -> None:
         if result.coverage.complete:
             result.coverage.complete = False
-            result.coverage.limit_reason = actual
-            result.issues.append(self._issue("crawl.limit_reached", "crawl", result.start_url, f"Crawl stopped at {actual}", evidence={"limit": actual}))
-        return True
+            result.coverage.limit_reason = reason
+            result.issues.append(self._issue("crawl.limit_reached", "crawl", result.start_url, f"Crawl stopped at {reason}", evidence={"limit": reason}))
 
     def _remaining_bytes(self, result: CrawlResult) -> int:
         return max(1, self.config.max_total_bytes - result.coverage.bytes_downloaded)
@@ -187,3 +239,12 @@ def _root_referrers(url: str, edges: set[Edge]) -> list[str]:
         elif source not in targets or source != url:
             roots.add(source)
     return sorted(roots or incoming.get(url, set()))
+
+
+def _is_compressible(content_type: str) -> bool:
+    return content_type.startswith("text/") or content_type in {"application/javascript", "application/json", "application/manifest+json", "application/xml", "image/svg+xml"}
+
+
+def _cache_max_age(value: str) -> int | None:
+    match = re.search(r"(?:s-maxage|max-age)\s*=\s*\"?(\d+)", value, re.I)
+    return int(match.group(1)) if match else None

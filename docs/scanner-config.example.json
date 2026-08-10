@@ -4,6 +4,10 @@
   "max_total_bytes": 1000000000,
   "max_resource_bytes": 25000000,
   "max_resource_size": 2000000,
+  "max_image_width": 3840,
+  "max_image_height": 2160,
+  "min_compression_bytes": 10000,
+  "min_cache_seconds": 604800,
   "timeout_seconds": 20,
   "max_duration_seconds": 3600,
   "follow_external_resources": false

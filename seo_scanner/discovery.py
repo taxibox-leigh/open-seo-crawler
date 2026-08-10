@@ -70,6 +70,6 @@ def discover_css(css_url: str, css: str) -> list[DiscoveredResource]:
         target = normalize_url(css_url, value)
         if target:
             suffix = target.split("?", 1)[0].lower()
-            kind = "stylesheet" if value.lower().endswith(".css") or match.group(4) else "font" if suffix.endswith((".woff", ".woff2", ".ttf", ".otf")) else "image" if suffix.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif")) else "other"
+            kind = "stylesheet" if value.lower().endswith(".css") or match.group(4) else "font" if suffix.endswith((".woff", ".woff2", ".ttf", ".otf")) else "image" if suffix.endswith((".png", ".apng", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".heic", ".heif", ".jxl", ".ico", ".bmp", ".tif", ".tiff")) else "other"
             found.setdefault(target, kind)
     return [DiscoveredResource(url, kind) for url, kind in found.items()]
