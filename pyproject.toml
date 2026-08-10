@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "open-seo-scanner"
+version = "0.1.0"
+description = "Automation-friendly technical SEO page and resource scanner"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+dependencies = [
+  "requests>=2.31,<3.0",
+  "beautifulsoup4>=4.12,<5.0",
+  "lxml>=5.0,<6.0",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+
+[project.scripts]
+open-seo-scanner = "seo_scanner.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["seo_scanner*"]

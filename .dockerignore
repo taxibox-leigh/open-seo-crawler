@@ -1,0 +1,12 @@
+.git
+.github
+__pycache__
+*.py[cod]
+*.egg-info
+.venv
+artifacts
+docs
+static
+templates
+tests
+test_data_correctness.py

@@ -17,4 +17,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: pip install -r requirements.txt
+      - run: pip install --no-deps .
+      - run: open-seo-scanner --help
       - run: python -m unittest discover -s tests -v
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f Dockerfile.scanner -t open-seo-scanner:test .
+      - run: docker run --rm open-seo-scanner:test --help
