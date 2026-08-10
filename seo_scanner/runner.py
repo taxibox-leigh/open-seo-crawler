@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 
 from .config import ScannerConfig
 from .analyzers.image import inspect_image
+from .analyzers.directives import PageSignals, extract_page_signals
 from .discovery import DiscoveredResource, discover_css, discover_html
 from .fetch import Fetcher
 from .models import Coverage, CrawlResult, Edge, Issue, Page, Resource
@@ -56,15 +57,37 @@ class Scanner:
                     result.issues.append(self._issue("page.fetch_failed", "page", url, str(exc)))
                     continue
                 result.coverage.bytes_downloaded += len(response.body)
-                result.pages.append(Page(url=url, final_url=response.final_url, status=response.status, content_type=response.content_type, bytes=len(response.body), duration_ms=response.duration_ms, title=_title(response.body, response.content_type), truncated=response.truncated))
+                html = ""
+                signals = PageSignals()
+                if response.status < 400 and response.content_type in ("text/html", "application/xhtml+xml"):
+                    html = response.body.decode(_encoding(response.content_type), errors="replace")
+                    signals = extract_page_signals(response.final_url, html, response.headers.get("x-robots-tag", ""))
+                result.pages.append(Page(
+                    url=url, final_url=response.final_url, status=response.status, content_type=response.content_type,
+                    bytes=len(response.body), duration_ms=response.duration_ms, title=_title(response.body, response.content_type),
+                    truncated=response.truncated, redirect_hops=response.redirect_hops, canonical_url=signals.canonical_url,
+                    robots_directives=signals.robots_directives, invalid_robots_directives=signals.invalid_robots_directives,
+                    jsonld_errors=signals.jsonld_errors,
+                ))
                 result.coverage.pages_fetched += 1
                 if response.truncated:
                     self._set_limit(result, "max_total_bytes")
                     break
-                if response.status < 400 and response.content_type in ("text/html", "application/xhtml+xml"):
-                    html = response.body.decode(_encoding(response.content_type), errors="replace")
+                if response.status >= 400 and any(edge.target_url == url and edge.context == "a.href" for edge in edges):
+                    result.issues.append(self._issue("link.http_error", "page", url, f"Internal link target returns HTTP {response.status}", edges, {"status": response.status}))
+                if response.redirect_hops and any(edge.target_url == url and edge.context == "a.href" for edge in edges):
+                    result.issues.append(self._issue("link.redirect", "page", url, f"Internal link redirects to {response.final_url}", edges, {"hops": response.redirect_hops}))
+                if signals.invalid_robots_directives:
+                    result.issues.append(self._issue("directive.invalid_robots", "page", url, "Unsupported robots directives were found", edges, {"directives": signals.invalid_robots_directives}))
+                if signals.jsonld_errors:
+                    result.issues.append(self._issue("structured_data.invalid_jsonld", "page", url, "One or more JSON-LD blocks are invalid", edges, {"errors": signals.jsonld_errors}))
+                if html:
                     links, resources, found_edges = discover_html(response.final_url, html)
                     edges.update(found_edges)
+                    if signals.canonical_url:
+                        edges.add(Edge(response.final_url, signals.canonical_url, "link.canonical"))
+                        if same_origin(start, signals.canonical_url) and signals.canonical_url not in seen_pages:
+                            page_queue.append(signals.canonical_url)
                     for link in links:
                         if same_origin(start, link) and link not in seen_pages:
                             page_queue.append(link)
@@ -95,6 +118,7 @@ class Scanner:
         result.edges = sorted(edges, key=lambda edge: (edge.source_url, edge.target_url, edge.context))
         self._add_graph_issues(result, edges)
         self._add_duplicate_issues(result, edges)
+        self._add_canonical_issues(result, edges)
         result.coverage.pages_queued = len(page_queue)
         result.coverage.resources_discovered = len(pending_resources)
         result.finished_at = _now()
@@ -175,6 +199,25 @@ class Scanner:
                 continue
             result.issues.append(self._issue("resource.duplicate_payload", "resource", urls[0], f"Identical content is served from {len(urls)} resource URLs", edges, {"sha256": digest, "urls": urls}))
 
+    def _add_canonical_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
+        pages = {page.url: page for page in result.pages}
+        canonicals = {page.url: page.canonical_url for page in result.pages if page.canonical_url}
+        for page in result.pages:
+            target_url = page.canonical_url
+            if not target_url:
+                continue
+            target = pages.get(target_url)
+            if target and target.status >= 400:
+                result.issues.append(self._issue("canonical.http_error", "page", page.url, f"Canonical target returns HTTP {target.status}", edges, {"canonical_url": target_url, "status": target.status}))
+            if target and target.redirect_hops:
+                result.issues.append(self._issue("canonical.redirect", "page", page.url, f"Canonical target redirects to {target.final_url}", edges, {"canonical_url": target_url, "final_url": target.final_url, "hops": target.redirect_hops}))
+            if target and target.canonical_url and target.canonical_url != target_url:
+                result.issues.append(self._issue("canonical.chain", "page", page.url, f"Canonical target declares {target.canonical_url}", edges, {"canonical_url": target_url, "next_canonical_url": target.canonical_url}))
+            if {"noindex", "none"} & set(page.robots_directives) and target_url != page.url:
+                result.issues.append(self._issue("directive.noindex_canonical_conflict", "page", page.url, "Page is noindex and canonicalizes to another URL", edges, {"canonical_url": target_url}))
+        for loop in _canonical_loops(canonicals):
+            result.issues.append(self._issue("canonical.loop", "page", loop[0], "Canonical declarations form a loop", edges, {"urls": loop}))
+
     def _limit(self, result: CrawlResult, deadline: float, condition: bool, reason: str) -> bool:
         actual = "max_duration_seconds" if time.monotonic() >= deadline else reason if condition else None
         if not actual:
@@ -248,3 +291,23 @@ def _is_compressible(content_type: str) -> bool:
 def _cache_max_age(value: str) -> int | None:
     match = re.search(r"(?:s-maxage|max-age)\s*=\s*\"?(\d+)", value, re.I)
     return int(match.group(1)) if match else None
+
+
+def _canonical_loops(canonicals: dict[str, str]) -> list[list[str]]:
+    loops: set[tuple[str, ...]] = set()
+    for start in canonicals:
+        path: list[str] = []
+        positions: dict[str, int] = {}
+        current = start
+        while current in canonicals and current not in positions:
+            positions[current] = len(path)
+            path.append(current)
+            current = canonicals[current]
+        if current not in positions:
+            continue
+        loop = path[positions[current]:]
+        if len(loop) == 1 and canonicals.get(loop[0]) == loop[0]:
+            continue
+        rotations = [tuple(loop[index:] + loop[:index]) for index in range(len(loop))]
+        loops.add(min(rotations))
+    return [list(loop) for loop in sorted(loops)]

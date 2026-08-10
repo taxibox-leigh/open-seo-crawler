@@ -399,6 +399,11 @@ also flags invalid or oversized images, duplicate payloads, mixed content, weak
 caching and missing transfer compression. Use `--resource-csv resources.csv` for
 a flat, size-sorted asset inventory alongside the JSON result.
 
+The scanner also validates every discovered same-origin link and canonical target.
+It reports broken or redirecting internal links with referring-page attribution,
+canonical errors/chains/loops, noindex/canonical conflicts, invalid robots tokens,
+and malformed JSON-LD blocks.
+
 ```bash
 python -m seo_scanner https://example.com \
   --max-pages 2000 \

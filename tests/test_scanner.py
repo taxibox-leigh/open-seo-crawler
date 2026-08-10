@@ -9,6 +9,7 @@ from pathlib import Path
 
 from seo_scanner.cli import main
 from seo_scanner.analyzers.image import inspect_image
+from seo_scanner.analyzers.directives import extract_page_signals
 from seo_scanner.config import ScannerConfig
 from seo_scanner.discovery import discover_css, discover_html
 from seo_scanner.runner import Scanner
@@ -18,10 +19,12 @@ from seo_scanner.scope import normalize_url
 class FixtureHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         routes = {
-            "/": (200, "text/html", b'''<title>Fixture</title><a href="/page-2">next</a>
+            "/": (200, "text/html", b'''<title>Fixture</title><link rel="canonical" href="/"><a href="/page-2">next</a><a href="/missing-page">missing</a>
                 <img src="/broken.png"><img srcset="/small.webp 1x, /large.webp 2x">
                 <script src="/wrong.js"></script><link rel="stylesheet" href="/style.css">''', {}),
-            "/page-2": (200, "text/html", b'<img src="/redirect.png">', {}),
+            "/page-2": (200, "text/html", b'<meta name="robots" content="noindex, nonsense"><link rel="canonical" href="/canonical-hop"><script type="application/ld+json">{"broken":}</script><img src="/redirect.png">', {}),
+            "/canonical-hop": (302, "text/plain", b"", {"Location": "/canonical-final"}),
+            "/canonical-final": (200, "text/html", b'<link rel="canonical" href="/page-2">', {}),
             "/broken.png": (404, "image/png", b"missing", {}),
             "/small.webp": (200, "image/webp", b"RIFF\x12\x00\x00\x00WEBPVP8X\x0a\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x02\x00\x00", {"Cache-Control": "public, max-age=31536000"}),
             "/large.webp": (200, "image/webp", b"x" * 128, {}),
@@ -82,6 +85,17 @@ class UnitTests(unittest.TestCase):
         avif = inspect_image(b"\x00\x00\x00\x18ftypavif\x00\x00\x00\x00avifmif1")
         self.assertEqual((avif.width, avif.height, avif.format), (None, None, "avif"))
 
+    def test_directive_and_jsonld_parsing(self) -> None:
+        signals = extract_page_signals(
+            "https://example.com/page",
+            '<link rel="canonical" href="/canonical"><meta name="robots" content="none, madeup"><script type="application/ld+json">{"ok": true}</script>',
+            "googlebot: noarchive",
+        )
+        self.assertEqual(signals.canonical_url, "https://example.com/canonical")
+        self.assertTrue({"none", "madeup", "noarchive"} <= set(signals.robots_directives))
+        self.assertEqual(signals.invalid_robots_directives, ["madeup"])
+        self.assertEqual(signals.jsonld_errors, [])
+
     def test_config_rejects_unknown_and_nonpositive_values(self) -> None:
         with self.assertRaises(ValueError):
             ScannerConfig.from_dict({"surprise": True})
@@ -94,10 +108,10 @@ class IntegrationTests(unittest.TestCase):
         with FixtureServer() as url:
             result = Scanner(ScannerConfig(max_resource_size=64, min_compression_bytes=10)).scan(url)
         self.assertEqual(result.status, "complete")
-        self.assertEqual(result.coverage.pages_fetched, 2)
+        self.assertGreaterEqual(result.coverage.pages_fetched, 4)
         self.assertGreaterEqual(result.coverage.resources_fetched, 8)
         ids = {issue.rule_id for issue in result.issues}
-        self.assertTrue({"resource.http_error", "resource.redirect", "resource.mime_mismatch", "resource.oversized", "resource.missing_compression", "resource.weak_cache", "resource.duplicate_payload"} <= ids)
+        self.assertTrue({"resource.http_error", "resource.redirect", "resource.mime_mismatch", "resource.oversized", "resource.missing_compression", "resource.weak_cache", "resource.duplicate_payload", "link.http_error", "canonical.redirect", "canonical.chain", "canonical.loop", "directive.invalid_robots", "directive.noindex_canonical_conflict", "structured_data.invalid_jsonld"} <= ids)
         broken = next(issue for issue in result.issues if issue.rule_id == "resource.http_error")
         self.assertEqual(broken.referring_urls, [url])
         self.assertTrue(any(resource.url.endswith("nested.png") for resource in result.resources))
@@ -132,7 +146,7 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.1")
+        self.assertEqual(report["schema_version"], "1.2")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
 
