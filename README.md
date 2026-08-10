@@ -383,3 +383,35 @@ Yes — MIT licensed and self-hosted, running entirely on your machine. No telem
 ## Related search terms
 
 SEO crawler, free SEO crawler, website SEO crawler, free SEO crawler tool, open source SEO crawler, free SEO spider, online SEO crawler self-hosted, open source SEO spider, free Screaming Frog alternative, self-hosted SEO audit tool, technical SEO crawler, website crawler for SEO, free site audit tool, SEO site crawler open source, Shopify SEO crawler, WordPress SEO audit tool, Webflow SEO audit, free duplicate content checker, free duplicate title checker, free duplicate meta description checker, free duplicate H1 checker, free broken link checker, free redirect chain finder, free hreflang validator, free XML sitemap analyzer, GDPR-safe SEO crawler, no signup SEO tool, no API key SEO crawler, CMS-aware crawler, concurrent web crawler, local SEO spider, MIT licensed SEO tool, Python SEO crawler, Flask SEO crawler, SEO audit XLSX export, severity-grouped SEO issues, post-crawl SEO summary dashboard, auto-update SEO tool
+
+# Unattended scanner (preview)
+
+The new scanner core provides a versioned JSON report, stable issue IDs, explicit
+coverage limits, and first-class page/resource inventories. It validates images,
+stylesheets, scripts, fonts and other HTML/CSS dependencies while retaining the
+page and discovery context that referred to each asset.
+
+```bash
+python -m seo_scanner https://example.com \
+  --max-pages 2000 \
+  --max-resources 10000 \
+  --max-duration-seconds 3600 \
+  --output seo-scan.json
+```
+
+Configuration can also be supplied as JSON with `--config`. Available keys are
+the fields in `seo_scanner.config.ScannerConfig`. The defaults scan same-origin
+resources and enforce page, resource, per-resource byte, total-byte and wall-clock
+limits. A limit produces a valid report with `status: "partial"`, an explicit
+`coverage.limit_reason`, and a `crawl.limit_reached` issue.
+
+Exit codes are suitable for scheduled jobs:
+
+- `0`: complete with no error-severity findings;
+- `1`: complete with one or more error-severity findings;
+- `2`: invalid configuration or output error;
+- `3`: valid partial report because a configured limit was reached.
+
+Progress snapshots are emitted as NDJSON on stderr. The final report is written
+to the requested output path. The existing Flask application remains available
+and unchanged while the scanner is integrated incrementally.
