@@ -448,3 +448,8 @@ Exit codes are suitable for scheduled jobs:
 Progress snapshots are emitted as NDJSON on stderr. The final report is written
 to the requested output path. The existing Flask application remains available
 and unchanged while the scanner is integrated incrementally.
+
+Install the CLI with `pip install .` to expose the `open-seo-scanner` command.
+For scheduled batch environments, `Dockerfile.scanner` provides the same command
+in a non-root, stateless image; see `docs/SCANNER_CONTAINER.md` for baseline and
+output mount examples.

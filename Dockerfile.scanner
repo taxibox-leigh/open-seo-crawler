@@ -1,0 +1,21 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+COPY pyproject.toml README.md LICENSE ./
+COPY seo_scanner ./seo_scanner
+
+RUN pip install --no-cache-dir . \
+    && groupadd --system scanner \
+    && useradd --system --uid 10001 --gid scanner --home-dir /nonexistent --shell /usr/sbin/nologin scanner \
+    && mkdir /output \
+    && chown scanner:scanner /output
+
+USER scanner
+WORKDIR /output
+
+ENTRYPOINT ["open-seo-scanner"]
