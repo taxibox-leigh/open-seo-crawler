@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-SCHEMA_VERSION = "1.2"
+SCHEMA_VERSION = "1.3"
 
 
 @dataclass
@@ -73,6 +73,18 @@ class Coverage:
     bytes_downloaded: int = 0
     complete: bool = True
     limit_reason: str | None = None
+    sitemaps_fetched: int = 0
+    sitemap_urls_discovered: int = 0
+
+
+@dataclass
+class SitemapDocument:
+    url: str
+    status: int | None = None
+    kind: str = "unknown"
+    urls: list[str] = field(default_factory=list)
+    child_sitemaps: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -88,6 +100,7 @@ class CrawlResult:
     issues: list[Issue] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     coverage: Coverage = field(default_factory=Coverage)
+    sitemaps: list[SitemapDocument] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

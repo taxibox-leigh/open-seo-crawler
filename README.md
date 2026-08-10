@@ -404,6 +404,12 @@ It reports broken or redirecting internal links with referring-page attribution,
 canonical errors/chains/loops, noindex/canonical conflicts, invalid robots tokens,
 and malformed JSON-LD blocks.
 
+Sitemap discovery reads robots.txt and the conventional sitemap location, follows
+same-origin sitemap indexes within a configurable bound, and adds sitemap URLs to
+the page crawl. Reports cover malformed XML, duplicate URLs, invalid lastmod
+values, protocol/count limits, HTTP errors, redirects, noindex URLs and
+non-canonical sitemap entries.
+
 ```bash
 python -m seo_scanner https://example.com \
   --max-pages 2000 \
