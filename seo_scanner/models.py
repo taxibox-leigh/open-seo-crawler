@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-SCHEMA_VERSION = "1.3"
+SCHEMA_VERSION = "1.4"
+
+
+@dataclass(frozen=True)
+class HreflangReference:
+    language: str
+    url: str
 
 
 @dataclass
@@ -34,6 +40,7 @@ class Page:
     robots_directives: list[str] = field(default_factory=list)
     invalid_robots_directives: list[str] = field(default_factory=list)
     jsonld_errors: list[str] = field(default_factory=list)
+    hreflang: list[HreflangReference] = field(default_factory=list)
 
 
 @dataclass

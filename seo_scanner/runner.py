@@ -16,6 +16,7 @@ from .config import ScannerConfig
 from .analyzers.image import inspect_image
 from .analyzers.directives import PageSignals, extract_page_signals
 from .analyzers.sitemap import parse_sitemap, sitemap_locations_from_robots
+from .analyzers.hreflang import analyze_hreflang
 from .discovery import DiscoveredResource, discover_css, discover_html
 from .fetch import Fetcher, FetchResponse
 from .models import Coverage, CrawlResult, Edge, Issue, Page, Resource, SitemapDocument
@@ -62,6 +63,7 @@ class Scanner:
         self._add_duplicate_issues(result, state.edges)
         self._add_canonical_issues(result, state.edges)
         self._add_sitemap_issues(result, state.edges)
+        result.issues.extend(analyze_hreflang(result))
         result.coverage.pages_queued = len(state.page_queue)
         result.coverage.resources_discovered = len(state.pending_resources)
         result.finished_at = _now()
@@ -101,7 +103,7 @@ class Scanner:
             bytes=len(response.body), duration_ms=response.duration_ms, title=_title(response.body, response.content_type),
             truncated=response.truncated, redirect_hops=response.redirect_hops, canonical_url=signals.canonical_url,
             robots_directives=signals.robots_directives, invalid_robots_directives=signals.invalid_robots_directives,
-            jsonld_errors=signals.jsonld_errors,
+            jsonld_errors=signals.jsonld_errors, hreflang=signals.hreflang,
         ))
         result.coverage.pages_fetched += 1
         if response.truncated:
@@ -130,6 +132,10 @@ class Scanner:
             state.edges.add(Edge(final_url, signals.canonical_url, "link.canonical"))
             if same_origin(state.start_url, signals.canonical_url) and signals.canonical_url not in state.seen_pages:
                 state.page_queue.append(signals.canonical_url)
+        for reference in signals.hreflang:
+            state.edges.add(Edge(final_url, reference.url, f"link.hreflang:{reference.language}"))
+            if same_origin(state.start_url, reference.url) and reference.url not in state.seen_pages:
+                state.page_queue.append(reference.url)
         for link in links:
             if same_origin(state.start_url, link) and link not in state.seen_pages:
                 state.page_queue.append(link)
@@ -391,24 +397,23 @@ def _expected_mime(kind: str) -> tuple[str, ...]:
 
 
 def _root_referrers(url: str, edges: set[Edge]) -> list[str]:
-    incoming: dict[str, set[str]] = {}
-    targets = {edge.target_url for edge in edges}
+    incoming: dict[str, list[Edge]] = {}
     for edge in edges:
-        incoming.setdefault(edge.target_url, set()).add(edge.source_url)
+        incoming.setdefault(edge.target_url, []).append(edge)
     roots: set[str] = set()
-    queue = deque(incoming.get(url, set()))
-    visited: set[str] = set()
+    queue = deque(incoming.get(url, []))
+    visited: set[tuple[str, str, str]] = set()
     while queue:
-        source = queue.popleft()
-        if source in visited:
+        edge = queue.popleft()
+        key = (edge.source_url, edge.target_url, edge.context)
+        if key in visited:
             continue
-        visited.add(source)
-        parents = incoming.get(source, set())
-        if parents:
-            queue.extend(parents)
-        elif source not in targets or source != url:
-            roots.add(source)
-    return sorted(roots or incoming.get(url, set()))
+        visited.add(key)
+        if edge.context == "css.url" and incoming.get(edge.source_url):
+            queue.extend(incoming[edge.source_url])
+        else:
+            roots.add(edge.source_url)
+    return sorted(roots)
 
 
 def _is_compressible(content_type: str) -> bool:

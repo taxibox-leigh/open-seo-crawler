@@ -410,6 +410,10 @@ the page crawl. Reports cover malformed XML, duplicate URLs, invalid lastmod
 values, protocol/count limits, HTTP errors, redirects, noindex URLs and
 non-canonical sitemap entries.
 
+Hreflang declarations are retained as graph edges and checked for tag syntax,
+duplicate languages, self-references, reciprocal return links, target status and
+redirects, target indexability, and target canonical alignment.
+
 ```bash
 python -m seo_scanner https://example.com \
   --max-pages 2000 \

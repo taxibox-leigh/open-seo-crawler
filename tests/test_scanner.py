@@ -11,6 +11,7 @@ from seo_scanner.cli import main
 from seo_scanner.analyzers.image import inspect_image
 from seo_scanner.analyzers.directives import extract_page_signals
 from seo_scanner.analyzers.sitemap import parse_sitemap
+from seo_scanner.analyzers.hreflang import valid_language_tag
 from seo_scanner.config import ScannerConfig
 from seo_scanner.discovery import discover_css, discover_html
 from seo_scanner.runner import Scanner
@@ -25,10 +26,10 @@ class FixtureHandler(BaseHTTPRequestHandler):
             "/sitemap.xml": (200, "application/xml", f'''<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><sitemap><loc>{base}/sitemap-pages.xml</loc></sitemap><sitemap><loc>{base}/sitemap-duplicate.xml</loc></sitemap></sitemapindex>'''.encode(), {}),
             "/sitemap-pages.xml": (200, "application/xml", f'''<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>{base}/</loc></url><url><loc>{base}/page-2</loc><lastmod>not-a-date</lastmod></url><url><loc>{base}/missing-page</loc></url></urlset>'''.encode(), {}),
             "/sitemap-duplicate.xml": (200, "application/xml", f'''<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>{base}/</loc></url></urlset>'''.encode(), {}),
-            "/": (200, "text/html", b'''<title>Fixture</title><link rel="canonical" href="/"><a href="/page-2">next</a><a href="/missing-page">missing</a>
+            "/": (200, "text/html", b'''<title>Fixture</title><link rel="canonical" href="/"><link rel="alternate" hreflang="en-AU" href="/"><link rel="alternate" hreflang="en-AU" href="/page-2"><link rel="alternate" hreflang="en_AU" href="/missing-page"><a href="/page-2">next</a><a href="/missing-page">missing</a>
                 <img src="/broken.png"><img srcset="/small.webp 1x, /large.webp 2x">
                 <script src="/wrong.js"></script><link rel="stylesheet" href="/style.css">''', {}),
-            "/page-2": (200, "text/html", b'<meta name="robots" content="noindex, nonsense"><link rel="canonical" href="/canonical-hop"><script type="application/ld+json">{"broken":}</script><img src="/redirect.png">', {}),
+            "/page-2": (200, "text/html", b'<meta name="robots" content="noindex, nonsense"><link rel="canonical" href="/canonical-hop"><link rel="alternate" hreflang="en-AU" href="/"><script type="application/ld+json">{"broken":}</script><img src="/redirect.png">', {}),
             "/canonical-hop": (302, "text/plain", b"", {"Location": "/canonical-final"}),
             "/canonical-final": (200, "text/html", b'<link rel="canonical" href="/page-2">', {}),
             "/broken.png": (404, "image/png", b"missing", {}),
@@ -108,6 +109,15 @@ class UnitTests(unittest.TestCase):
         oversized = parse_sitemap("https://example.com/sitemap.xml", b"<urlset></urlset>", max_uncompressed_bytes=4)
         self.assertIn("exceeds", oversized.errors[0])
 
+    def test_hreflang_language_and_region_validation(self) -> None:
+        self.assertTrue(valid_language_tag("en-AU"))
+        self.assertTrue(valid_language_tag("zh-Hans"))
+        self.assertTrue(valid_language_tag("es-419"))
+        self.assertTrue(valid_language_tag("x-default"))
+        self.assertFalse(valid_language_tag("zz-AU"))
+        self.assertFalse(valid_language_tag("en-ZZ"))
+        self.assertFalse(valid_language_tag("en_AU"))
+
     def test_config_rejects_unknown_and_nonpositive_values(self) -> None:
         with self.assertRaises(ValueError):
             ScannerConfig.from_dict({"surprise": True})
@@ -123,7 +133,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertGreaterEqual(result.coverage.pages_fetched, 4)
         self.assertGreaterEqual(result.coverage.resources_fetched, 8)
         ids = {issue.rule_id for issue in result.issues}
-        self.assertTrue({"resource.http_error", "resource.redirect", "resource.mime_mismatch", "resource.oversized", "resource.missing_compression", "resource.weak_cache", "resource.duplicate_payload", "link.http_error", "canonical.redirect", "canonical.chain", "canonical.loop", "directive.invalid_robots", "directive.noindex_canonical_conflict", "structured_data.invalid_jsonld", "sitemap.duplicate_url", "sitemap.invalid_lastmod", "sitemap.url_http_error", "sitemap.url_noindex", "sitemap.url_noncanonical"} <= ids)
+        self.assertTrue({"resource.http_error", "resource.redirect", "resource.mime_mismatch", "resource.oversized", "resource.missing_compression", "resource.weak_cache", "resource.duplicate_payload", "link.http_error", "canonical.redirect", "canonical.chain", "canonical.loop", "directive.invalid_robots", "directive.noindex_canonical_conflict", "structured_data.invalid_jsonld", "sitemap.duplicate_url", "sitemap.invalid_lastmod", "sitemap.url_http_error", "sitemap.url_noindex", "sitemap.url_noncanonical", "hreflang.invalid_language", "hreflang.duplicate_language", "hreflang.missing_self", "hreflang.missing_return", "hreflang.target_http_error", "hreflang.target_noindex", "hreflang.target_noncanonical"} <= ids)
         self.assertEqual(result.coverage.sitemaps_fetched, 3)
         self.assertEqual(result.coverage.sitemap_urls_discovered, 3)
         broken = next(issue for issue in result.issues if issue.rule_id == "resource.http_error")
@@ -160,7 +170,7 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.3")
+        self.assertEqual(report["schema_version"], "1.4")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
 

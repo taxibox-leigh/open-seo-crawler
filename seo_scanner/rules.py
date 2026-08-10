@@ -50,6 +50,14 @@ RULES = {
         Rule("sitemap.url_redirect", "Sitemap URL redirects", "warning", "Replace it with the final canonical URL."),
         Rule("sitemap.url_noindex", "Sitemap URL is noindex", "error", "Remove the URL from the sitemap or make it indexable."),
         Rule("sitemap.url_noncanonical", "Sitemap URL canonicalizes elsewhere", "warning", "List only the canonical URL in the sitemap."),
+        Rule("hreflang.invalid_language", "Hreflang language tag is invalid", "error", "Use x-default or a valid language tag with optional script and region subtags."),
+        Rule("hreflang.duplicate_language", "Page has duplicate hreflang language entries", "error", "Declare only one alternate URL for each language/region value."),
+        Rule("hreflang.missing_self", "Hreflang cluster is missing a self-reference", "warning", "Include the current canonical page in its own hreflang set."),
+        Rule("hreflang.missing_return", "Hreflang alternate has no return link", "error", "Add a reciprocal hreflang reference from the alternate page."),
+        Rule("hreflang.target_http_error", "Hreflang target returns an HTTP error", "error", "Point hreflang to a successful indexable page."),
+        Rule("hreflang.target_redirect", "Hreflang target redirects", "error", "Point hreflang directly to the final canonical URL."),
+        Rule("hreflang.target_noindex", "Hreflang target is noindex", "error", "Use an indexable alternate target or remove it from the cluster."),
+        Rule("hreflang.target_noncanonical", "Hreflang target canonicalizes elsewhere", "warning", "Point hreflang to the target's canonical URL."),
     )
 }
 
