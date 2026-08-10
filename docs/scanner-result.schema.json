@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://open-seo-crawler.dev/schema/scanner-result-1.5.json",
+  "$id": "https://open-seo-crawler.dev/schema/scanner-result-1.6.json",
   "title": "Open SEO Scanner result",
   "type": "object",
-  "required": ["schema_version", "start_url", "started_at", "finished_at", "status", "pages", "resources", "edges", "issues", "errors", "coverage", "sitemaps", "external_links"],
+  "required": ["schema_version", "start_url", "started_at", "finished_at", "status", "pages", "resources", "edges", "issues", "errors", "coverage", "sitemaps", "external_links", "comparison"],
   "properties": {
-    "schema_version": {"const": "1.5"},
+    "schema_version": {"const": "1.6"},
     "start_url": {"type": "string", "format": "uri"},
     "started_at": {"type": "string", "format": "date-time"},
     "finished_at": {"type": "string", "format": "date-time"},
@@ -17,7 +17,8 @@
     "errors": {"type": "array", "items": {"type": "string"}},
     "coverage": {"$ref": "#/$defs/coverage"},
     "sitemaps": {"type": "array", "items": {"$ref": "#/$defs/sitemap"}},
-    "external_links": {"type": "array", "items": {"$ref": "#/$defs/external_link"}}
+    "external_links": {"type": "array", "items": {"$ref": "#/$defs/external_link"}},
+    "comparison": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/comparison"}]}
   },
   "additionalProperties": false,
   "$defs": {
@@ -53,11 +54,12 @@
       "properties": {"source_url": {"type": "string"}, "target_url": {"type": "string"}, "context": {"type": "string"}}, "additionalProperties": false
     },
     "issue": {
-      "type": "object", "required": ["rule_id", "title", "severity", "entity_type", "url", "message", "evidence", "referring_urls", "remediation"],
+      "type": "object", "required": ["rule_id", "title", "severity", "entity_type", "url", "message", "evidence", "referring_urls", "remediation", "issue_id", "suppressed"],
       "properties": {
         "rule_id": {"type": "string"}, "title": {"type": "string"}, "severity": {"enum": ["error", "warning", "info"]},
         "entity_type": {"type": "string"}, "url": {"type": "string"}, "message": {"type": "string"},
-        "evidence": {"type": "object"}, "referring_urls": {"type": "array", "items": {"type": "string"}}, "remediation": {"type": "string"}
+        "evidence": {"type": "object"}, "referring_urls": {"type": "array", "items": {"type": "string"}}, "remediation": {"type": "string"},
+        "issue_id": {"type": "string"}, "suppressed": {"type": "boolean"}
       }, "additionalProperties": false
     },
     "coverage": {
@@ -83,6 +85,15 @@
         "url": {"type": "string"}, "final_url": {"type": "string"}, "status": {"type": ["integer", "null"]},
         "redirect_hops": {"type": "array", "items": {"type": "string"}},
         "referring_urls": {"type": "array", "items": {"type": "string"}}, "error": {"type": "string"}
+      }, "additionalProperties": false
+    },
+    "comparison": {
+      "type": "object", "required": ["new_issue_ids", "persistent_issue_ids", "resolved_issue_ids", "suppressed_issue_ids"],
+      "properties": {
+        "new_issue_ids": {"type": "array", "items": {"type": "string"}},
+        "persistent_issue_ids": {"type": "array", "items": {"type": "string"}},
+        "resolved_issue_ids": {"type": "array", "items": {"type": "string"}},
+        "suppressed_issue_ids": {"type": "array", "items": {"type": "string"}}
       }, "additionalProperties": false
     }
   }

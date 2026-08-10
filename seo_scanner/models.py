@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from typing import Any
+import hashlib
 
-SCHEMA_VERSION = "1.5"
+SCHEMA_VERSION = "1.6"
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,12 @@ class Issue:
     evidence: dict[str, Any] = field(default_factory=dict)
     referring_urls: list[str] = field(default_factory=list)
     remediation: str = ""
+    issue_id: str = field(init=False)
+    suppressed: bool = False
+
+    def __post_init__(self) -> None:
+        identity = f"{self.rule_id}\n{self.entity_type}\n{self.url}".encode("utf-8")
+        self.issue_id = f"{self.rule_id}:{hashlib.sha256(identity).hexdigest()[:16]}"
 
 
 @dataclass
@@ -107,6 +114,14 @@ class ExternalLinkTarget:
 
 
 @dataclass
+class BaselineComparison:
+    new_issue_ids: list[str] = field(default_factory=list)
+    persistent_issue_ids: list[str] = field(default_factory=list)
+    resolved_issue_ids: list[str] = field(default_factory=list)
+    suppressed_issue_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
 class CrawlResult:
     start_url: str
     started_at: str
@@ -121,6 +136,7 @@ class CrawlResult:
     coverage: Coverage = field(default_factory=Coverage)
     sitemaps: list[SitemapDocument] = field(default_factory=list)
     external_links: list[ExternalLinkTarget] = field(default_factory=list)
+    comparison: BaselineComparison | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

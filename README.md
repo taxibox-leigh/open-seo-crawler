@@ -404,6 +404,11 @@ HEAD with a bounded GET fallback for servers that reject HEAD. It has an
 independent target cap, per-host delay, coverage counters and referring-page
 evidence, so enabling it remains explicit and bounded.
 
+Every issue instance has a deterministic `issue_id` derived from its stable rule,
+entity type and URL. `--baseline previous.json` reports new, persistent and
+resolved IDs; `--ignore-issues ignored.json` marks durable suppressions without
+deleting evidence. Suppressed errors do not affect the CLI failure exit code.
+
 The scanner also validates every discovered same-origin link and canonical target.
 It reports broken or redirecting internal links with referring-page attribution,
 canonical errors/chains/loops, noindex/canonical conflicts, invalid robots tokens,
