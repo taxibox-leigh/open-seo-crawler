@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 
 
 @dataclass
@@ -29,6 +29,11 @@ class Page:
     duration_ms: int
     title: str = ""
     truncated: bool = False
+    redirect_hops: list[str] = field(default_factory=list)
+    canonical_url: str = ""
+    robots_directives: list[str] = field(default_factory=list)
+    invalid_robots_directives: list[str] = field(default_factory=list)
+    jsonld_errors: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -29,6 +29,15 @@ RULES = {
         Rule("resource.duplicate_payload", "Multiple resource URLs return identical content", "info", "Consolidate duplicate assets where separate URLs are unnecessary."),
         Rule("crawl.limit_reached", "Crawl stopped at a configured limit", "error", "Increase the limit or reduce crawl scope so the audit covers the whole site."),
         Rule("page.fetch_failed", "Page could not be fetched", "error", "Restore the page or remove links to it."),
+        Rule("link.http_error", "Internal link target returns an HTTP error", "error", "Restore the target or update every internal link that references it."),
+        Rule("link.redirect", "Internal link target redirects", "warning", "Update internal links to point directly to the final URL."),
+        Rule("canonical.http_error", "Canonical target returns an HTTP error", "error", "Point the canonical to a successful, indexable URL."),
+        Rule("canonical.redirect", "Canonical target redirects", "error", "Point the canonical directly to its final successful URL."),
+        Rule("canonical.chain", "Canonical target declares another canonical", "warning", "Use a single direct canonical target across the cluster."),
+        Rule("canonical.loop", "Canonical declarations form a loop", "error", "Choose one canonical URL and point every cluster member directly to it."),
+        Rule("directive.noindex_canonical_conflict", "Noindex page canonicalizes elsewhere", "warning", "Use either noindex or canonical consolidation consistently for the intended outcome."),
+        Rule("directive.invalid_robots", "Robots directive contains unsupported tokens", "warning", "Correct or remove invalid robots meta or X-Robots-Tag tokens."),
+        Rule("structured_data.invalid_jsonld", "JSON-LD block contains invalid JSON", "error", "Correct the JSON syntax in the structured-data block."),
     )
 }
 
