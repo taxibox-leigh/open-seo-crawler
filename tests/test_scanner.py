@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import unittest
+import requests
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -15,6 +16,7 @@ from seo_scanner.analyzers.hreflang import valid_language_tag
 from seo_scanner.baseline import apply_suppressions, compare_with_baseline
 from seo_scanner.config import ScannerConfig
 from seo_scanner.discovery import discover_css, discover_html
+from seo_scanner.fetch import Fetcher
 from seo_scanner.runner import Scanner
 from seo_scanner.scope import normalize_url
 from seo_scanner.models import Issue
@@ -75,6 +77,17 @@ class FixtureServer:
 
 
 class UnitTests(unittest.TestCase):
+    def test_fetcher_only_advertises_decodable_content_encodings(self) -> None:
+        fetcher = Fetcher("scanner-test", 10)
+        try:
+            self.assertEqual(
+                fetcher.session.headers["Accept-Encoding"],
+                requests.utils.default_headers()["Accept-Encoding"],
+            )
+            self.assertEqual(fetcher.session.headers["User-Agent"], "scanner-test")
+        finally:
+            fetcher.close()
+
     def test_url_normalization(self) -> None:
         self.assertEqual(normalize_url("https://EXAMPLE.com/a/", "../img.png#x"), "https://example.com/img.png")
         self.assertIsNone(normalize_url("https://example.com", "data:image/png,x"))

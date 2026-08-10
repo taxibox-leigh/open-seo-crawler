@@ -23,7 +23,11 @@ class FetchResponse:
 class Fetcher:
     def __init__(self, user_agent: str, timeout_seconds: float) -> None:
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate, br"})
+        # Keep requests/urllib3's capability-aware Accept-Encoding header. It
+        # advertises Brotli only when a Brotli decoder is actually installed;
+        # forcing `br` here can otherwise leave compressed response bytes
+        # undecoded and make valid HTML/XML appear malformed.
+        self.session.headers.update({"User-Agent": user_agent})
         self.timeout_seconds = timeout_seconds
 
     def get(self, url: str, max_bytes: int) -> FetchResponse:
