@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://open-seo-crawler.dev/schema/scanner-result-1.3.json",
+  "$id": "https://open-seo-crawler.dev/schema/scanner-result-1.4.json",
   "title": "Open SEO Scanner result",
   "type": "object",
   "required": ["schema_version", "start_url", "started_at", "finished_at", "status", "pages", "resources", "edges", "issues", "errors", "coverage", "sitemaps"],
   "properties": {
-    "schema_version": {"const": "1.3"},
+    "schema_version": {"const": "1.4"},
     "start_url": {"type": "string", "format": "uri"},
     "started_at": {"type": "string", "format": "date-time"},
     "finished_at": {"type": "string", "format": "date-time"},
@@ -22,14 +22,19 @@
   "$defs": {
     "page": {
       "type": "object",
-      "required": ["url", "final_url", "status", "content_type", "bytes", "duration_ms", "title", "truncated", "redirect_hops", "canonical_url", "robots_directives", "invalid_robots_directives", "jsonld_errors"],
+      "required": ["url", "final_url", "status", "content_type", "bytes", "duration_ms", "title", "truncated", "redirect_hops", "canonical_url", "robots_directives", "invalid_robots_directives", "jsonld_errors", "hreflang"],
       "properties": {
         "url": {"type": "string"}, "final_url": {"type": "string"}, "status": {"type": "integer"},
         "content_type": {"type": "string"}, "bytes": {"type": "integer"}, "duration_ms": {"type": "integer"}, "title": {"type": "string"}, "truncated": {"type": "boolean"},
         "redirect_hops": {"type": "array", "items": {"type": "string"}}, "canonical_url": {"type": "string"},
         "robots_directives": {"type": "array", "items": {"type": "string"}}, "invalid_robots_directives": {"type": "array", "items": {"type": "string"}},
-        "jsonld_errors": {"type": "array", "items": {"type": "string"}}
+        "jsonld_errors": {"type": "array", "items": {"type": "string"}},
+        "hreflang": {"type": "array", "items": {"$ref": "#/$defs/hreflang"}}
       }, "additionalProperties": false
+    },
+    "hreflang": {
+      "type": "object", "required": ["language", "url"],
+      "properties": {"language": {"type": "string"}, "url": {"type": "string"}}, "additionalProperties": false
     },
     "resource": {
       "type": "object",

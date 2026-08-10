@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from bs4 import BeautifulSoup
 
 from ..scope import normalize_url
+from ..models import HreflangReference
 
 
 @dataclass
@@ -15,6 +16,7 @@ class PageSignals:
     robots_directives: list[str] = field(default_factory=list)
     invalid_robots_directives: list[str] = field(default_factory=list)
     jsonld_errors: list[str] = field(default_factory=list)
+    hreflang: list[HreflangReference] = field(default_factory=list)
 
 
 _SIMPLE_DIRECTIVES = {"all", "none", "index", "noindex", "follow", "nofollow", "noarchive", "nosnippet", "noimageindex", "nocache", "notranslate", "nopagereadaloud"}
@@ -40,7 +42,13 @@ def extract_page_signals(page_url: str, html: str, x_robots_tag: str = "") -> Pa
             json.loads(value)
         except json.JSONDecodeError as exc:
             jsonld_errors.append(f"Block {index}: {exc.msg} at line {exc.lineno} column {exc.colno}")
-    return PageSignals(canonical_url or "", sorted(set(directives)), invalid, jsonld_errors)
+    hreflang: list[HreflangReference] = []
+    for tag in soup.select('link[rel~="alternate"][hreflang][href]'):
+        target = normalize_url(page_url, tag.get("href", ""))
+        language = tag.get("hreflang", "").strip()
+        if target and language:
+            hreflang.append(HreflangReference(language, target))
+    return PageSignals(canonical_url or "", sorted(set(directives)), invalid, jsonld_errors, hreflang)
 
 
 def _parse_directives(values: list[str]) -> list[str]:
