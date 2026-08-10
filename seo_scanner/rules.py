@@ -38,6 +38,18 @@ RULES = {
         Rule("directive.noindex_canonical_conflict", "Noindex page canonicalizes elsewhere", "warning", "Use either noindex or canonical consolidation consistently for the intended outcome."),
         Rule("directive.invalid_robots", "Robots directive contains unsupported tokens", "warning", "Correct or remove invalid robots meta or X-Robots-Tag tokens."),
         Rule("structured_data.invalid_jsonld", "JSON-LD block contains invalid JSON", "error", "Correct the JSON syntax in the structured-data block."),
+        Rule("sitemap.fetch_failed", "Sitemap could not be fetched", "error", "Restore the sitemap or remove its declaration from robots.txt or the sitemap index."),
+        Rule("sitemap.http_error", "Sitemap returns an HTTP error", "error", "Serve the sitemap successfully or update/remove its declaration."),
+        Rule("sitemap.invalid_xml", "Sitemap XML is malformed or unsupported", "error", "Serve a valid XML urlset or sitemapindex document."),
+        Rule("sitemap.duplicate_url", "Sitemap contains duplicate URLs", "warning", "List each canonical URL only once across the sitemap set."),
+        Rule("sitemap.invalid_lastmod", "Sitemap lastmod value is invalid", "warning", "Use a valid W3C date or datetime in lastmod."),
+        Rule("sitemap.url_limit", "Sitemap exceeds the URL protocol limit", "error", "Split the sitemap so each file contains no more than 50,000 URLs."),
+        Rule("sitemap.byte_limit", "Sitemap exceeds the configured byte limit", "error", "Split or compress the sitemap within the protocol size limit."),
+        Rule("sitemap.recursion_limit", "Sitemap discovery reached its configured limit", "error", "Raise the sitemap limit or remove recursive/unnecessary sitemap indexes."),
+        Rule("sitemap.url_http_error", "Sitemap URL returns an HTTP error", "error", "Remove the URL from the sitemap or restore a successful canonical page."),
+        Rule("sitemap.url_redirect", "Sitemap URL redirects", "warning", "Replace it with the final canonical URL."),
+        Rule("sitemap.url_noindex", "Sitemap URL is noindex", "error", "Remove the URL from the sitemap or make it indexable."),
+        Rule("sitemap.url_noncanonical", "Sitemap URL canonicalizes elsewhere", "warning", "List only the canonical URL in the sitemap."),
     )
 }
 

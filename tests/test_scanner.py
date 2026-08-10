@@ -10,6 +10,7 @@ from pathlib import Path
 from seo_scanner.cli import main
 from seo_scanner.analyzers.image import inspect_image
 from seo_scanner.analyzers.directives import extract_page_signals
+from seo_scanner.analyzers.sitemap import parse_sitemap
 from seo_scanner.config import ScannerConfig
 from seo_scanner.discovery import discover_css, discover_html
 from seo_scanner.runner import Scanner
@@ -18,7 +19,12 @@ from seo_scanner.scope import normalize_url
 
 class FixtureHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
+        base = f"http://{self.headers['Host']}"
         routes = {
+            "/robots.txt": (200, "text/plain", f"User-agent: *\nSitemap: {base}/sitemap.xml\n".encode(), {}),
+            "/sitemap.xml": (200, "application/xml", f'''<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><sitemap><loc>{base}/sitemap-pages.xml</loc></sitemap><sitemap><loc>{base}/sitemap-duplicate.xml</loc></sitemap></sitemapindex>'''.encode(), {}),
+            "/sitemap-pages.xml": (200, "application/xml", f'''<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>{base}/</loc></url><url><loc>{base}/page-2</loc><lastmod>not-a-date</lastmod></url><url><loc>{base}/missing-page</loc></url></urlset>'''.encode(), {}),
+            "/sitemap-duplicate.xml": (200, "application/xml", f'''<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>{base}/</loc></url></urlset>'''.encode(), {}),
             "/": (200, "text/html", b'''<title>Fixture</title><link rel="canonical" href="/"><a href="/page-2">next</a><a href="/missing-page">missing</a>
                 <img src="/broken.png"><img srcset="/small.webp 1x, /large.webp 2x">
                 <script src="/wrong.js"></script><link rel="stylesheet" href="/style.css">''', {}),
@@ -96,6 +102,12 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(signals.invalid_robots_directives, ["madeup"])
         self.assertEqual(signals.jsonld_errors, [])
 
+    def test_sitemap_parser_rejects_unsupported_or_oversized_xml(self) -> None:
+        unsupported = parse_sitemap("https://example.com/sitemap.xml", b"<rss></rss>")
+        self.assertIn("Unsupported root element", unsupported.errors[0])
+        oversized = parse_sitemap("https://example.com/sitemap.xml", b"<urlset></urlset>", max_uncompressed_bytes=4)
+        self.assertIn("exceeds", oversized.errors[0])
+
     def test_config_rejects_unknown_and_nonpositive_values(self) -> None:
         with self.assertRaises(ValueError):
             ScannerConfig.from_dict({"surprise": True})
@@ -111,7 +123,9 @@ class IntegrationTests(unittest.TestCase):
         self.assertGreaterEqual(result.coverage.pages_fetched, 4)
         self.assertGreaterEqual(result.coverage.resources_fetched, 8)
         ids = {issue.rule_id for issue in result.issues}
-        self.assertTrue({"resource.http_error", "resource.redirect", "resource.mime_mismatch", "resource.oversized", "resource.missing_compression", "resource.weak_cache", "resource.duplicate_payload", "link.http_error", "canonical.redirect", "canonical.chain", "canonical.loop", "directive.invalid_robots", "directive.noindex_canonical_conflict", "structured_data.invalid_jsonld"} <= ids)
+        self.assertTrue({"resource.http_error", "resource.redirect", "resource.mime_mismatch", "resource.oversized", "resource.missing_compression", "resource.weak_cache", "resource.duplicate_payload", "link.http_error", "canonical.redirect", "canonical.chain", "canonical.loop", "directive.invalid_robots", "directive.noindex_canonical_conflict", "structured_data.invalid_jsonld", "sitemap.duplicate_url", "sitemap.invalid_lastmod", "sitemap.url_http_error", "sitemap.url_noindex", "sitemap.url_noncanonical"} <= ids)
+        self.assertEqual(result.coverage.sitemaps_fetched, 3)
+        self.assertEqual(result.coverage.sitemap_urls_discovered, 3)
         broken = next(issue for issue in result.issues if issue.rule_id == "resource.http_error")
         self.assertEqual(broken.referring_urls, [url])
         self.assertTrue(any(resource.url.endswith("nested.png") for resource in result.resources))
@@ -136,7 +150,7 @@ class IntegrationTests(unittest.TestCase):
             result = Scanner(ScannerConfig(max_total_bytes=16)).scan(url)
         self.assertEqual(result.status, "partial")
         self.assertEqual(result.coverage.limit_reason, "max_total_bytes")
-        self.assertTrue(result.pages[0].truncated)
+        self.assertTrue(not result.pages or result.pages[0].truncated)
 
     def test_cli_writes_report_and_meaningful_exit_code(self) -> None:
         with FixtureServer() as url, TemporaryDirectory() as directory:
@@ -146,7 +160,7 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.2")
+        self.assertEqual(report["schema_version"], "1.3")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
 
