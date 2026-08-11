@@ -170,6 +170,7 @@ class IntegrationTests(unittest.TestCase):
             result = Scanner(ScannerConfig(max_pages=1)).scan(url)
         self.assertEqual(result.status, "partial")
         self.assertEqual(result.coverage.limit_reason, "max_pages")
+        self.assertEqual(result.coverage.pages_queued, 2)
         self.assertEqual([issue.rule_id for issue in result.issues].count("crawl.limit_reached"), 1)
         json.dumps(result.to_dict())
 

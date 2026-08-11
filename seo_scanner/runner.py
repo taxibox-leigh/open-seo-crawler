@@ -32,6 +32,7 @@ class _RunState:
     result: CrawlResult
     deadline: float
     page_queue: deque[str] = field(default_factory=deque)
+    queued_pages: set[str] = field(default_factory=set)
     seen_pages: set[str] = field(default_factory=set)
     pending_resources: dict[str, str] = field(default_factory=dict)
     seen_resources: set[str] = field(default_factory=set)
@@ -48,13 +49,19 @@ class Scanner:
         if not start:
             raise ValueError("start_url must be an absolute HTTP(S) URL")
         result = CrawlResult(start_url=start, started_at=_now())
-        state = _RunState(start, result, time.monotonic() + self.config.max_duration_seconds, deque([start]))
+        state = _RunState(
+            start_url=start,
+            result=result,
+            deadline=time.monotonic() + self.config.max_duration_seconds,
+            page_queue=deque([start]),
+            queued_pages={start},
+        )
 
         with Fetcher(self.config.user_agent, self.config.timeout_seconds) as fetcher:
             if self.config.discover_sitemaps:
                 for sitemap_page in self._crawl_sitemaps(fetcher, result, start, state.deadline):
-                    if same_origin(start, sitemap_page) and sitemap_page not in state.page_queue:
-                        state.page_queue.append(sitemap_page)
+                    if same_origin(start, sitemap_page):
+                        self._enqueue_page(state, sitemap_page)
             self._crawl_pages(fetcher, state)
             if self.config.validate_external_links:
                 self._check_external_links(fetcher, state)
@@ -79,6 +86,7 @@ class Scanner:
             if self._limit(state.result, state.deadline, state.result.coverage.bytes_downloaded >= self.config.max_total_bytes, "max_total_bytes"):
                 return
             url = state.page_queue.popleft()
+            state.queued_pages.discard(url)
             if url in state.seen_pages:
                 continue
             state.seen_pages.add(url)
@@ -132,18 +140,25 @@ class Scanner:
         state.edges.update(found_edges)
         if signals.canonical_url:
             state.edges.add(Edge(final_url, signals.canonical_url, "link.canonical"))
-            if same_origin(state.start_url, signals.canonical_url) and signals.canonical_url not in state.seen_pages:
-                state.page_queue.append(signals.canonical_url)
+            if same_origin(state.start_url, signals.canonical_url):
+                self._enqueue_page(state, signals.canonical_url)
         for reference in signals.hreflang:
             state.edges.add(Edge(final_url, reference.url, f"link.hreflang:{reference.language}"))
-            if same_origin(state.start_url, reference.url) and reference.url not in state.seen_pages:
-                state.page_queue.append(reference.url)
+            if same_origin(state.start_url, reference.url):
+                self._enqueue_page(state, reference.url)
         for link in links:
-            if same_origin(state.start_url, link) and link not in state.seen_pages:
-                state.page_queue.append(link)
+            if same_origin(state.start_url, link):
+                self._enqueue_page(state, link)
         for item in resources:
             if self.config.follow_external_resources or same_origin(state.start_url, item.url):
                 state.pending_resources.setdefault(item.url, item.kind)
+
+    @staticmethod
+    def _enqueue_page(state: _RunState, url: str) -> None:
+        if url in state.seen_pages or url in state.queued_pages:
+            return
+        state.page_queue.append(url)
+        state.queued_pages.add(url)
 
     def _crawl_resources(self, fetcher: Fetcher, state: _RunState) -> None:
         resource_queue = deque(state.pending_resources)
