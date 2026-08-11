@@ -19,6 +19,7 @@ from .analyzers.robots import RobotsPolicy, parse_robots
 from .analyzers.url_quality import UrlQuality, analyze_url
 from .analyzers.hreflang import analyze_hreflang, valid_language_tag
 from .analyzers.encoding import EncodingSignals, analyze_encoding
+from .analyzers.document import DocumentSignals, analyze_document
 from .discovery import DiscoveredResource, discover_css, discover_html
 from .fetch import Fetcher, FetchResponse
 from .models import Coverage, CrawlResult, Edge, ExternalLinkTarget, Issue, Page, Resource, RobotsDocument, SitemapDocument
@@ -160,6 +161,7 @@ class Scanner:
         html = ""
         signals = PageSignals()
         encoding = EncodingSignals()
+        document = DocumentSignals()
         content = PageContent()
         url_quality = analyze_url(url)
         if response.status < 400 and response.content_type in ("text/html", "application/xhtml+xml"):
@@ -167,6 +169,7 @@ class Scanner:
             html = response.body.decode(encoding.effective_charset, errors="replace")
             signals = extract_page_signals(response.final_url, html, response.headers.get("x-robots-tag", ""))
             content = extract_page_content(html, response.final_url)
+            document = analyze_document(html)
         result.pages.append(Page(
             url=url, final_url=response.final_url, status=response.status, content_type=response.content_type,
             bytes=len(response.body), duration_ms=response.duration_ms, title=content.title,
@@ -188,9 +191,13 @@ class Scanner:
             html_language=signals.html_language,
             content_languages=_content_languages(response.headers.get("content-language", "")),
             http_charset=encoding.http_charset, meta_charsets=encoding.meta_charsets,
+            visible_text_hash=content.visible_text_hash,
+            visible_text_fingerprint=content.visible_text_fingerprint,
+            document_head_count=document.head_count, document_body_count=document.body_count,
+            title_count=document.title_count, meta_description_count=document.meta_description_count,
         ))
         result.coverage.pages_fetched += 1
-        self._add_page_response_issues(result, url, response, signals, encoding, state.edges)
+        self._add_page_response_issues(result, url, response, signals, encoding, document, state.edges)
         self._add_url_quality_issues(result, url, url_quality, state.edges)
         if html:
             self._queue_page_discoveries(state, response.final_url, html, signals, content)
@@ -202,7 +209,7 @@ class Scanner:
             self._mark_incomplete(result, "max_page_bytes")
         return False
 
-    def _add_page_response_issues(self, result: CrawlResult, url: str, response: FetchResponse, signals: PageSignals, encoding: EncodingSignals, edges: set[Edge]) -> None:
+    def _add_page_response_issues(self, result: CrawlResult, url: str, response: FetchResponse, signals: PageSignals, encoding: EncodingSignals, document: DocumentSignals, edges: set[Edge]) -> None:
         linked = any(edge.target_url == url and edge.context == "a.href" for edge in edges)
         if response.status >= 400 and linked:
             result.issues.append(self._issue("link.http_error", "page", url, f"Internal link target returns HTTP {response.status}", edges, {"status": response.status}))
@@ -221,6 +228,20 @@ class Scanner:
             result.issues.append(self._issue("directive.conflicting_robots", "page", url, "Contradictory robots directives were found", edges, {"conflicts": signals.robots_conflicts, "directives": signals.robots_directives}))
         content_languages = _content_languages(response.headers.get("content-language", ""))
         if response.status < 400 and response.content_type in ("text/html", "application/xhtml+xml"):
+            if document.head_count == 0:
+                result.issues.append(self._issue("document.head_missing", "page", url, "HTML source has no explicit head element", edges))
+            elif document.head_count > 1:
+                result.issues.append(self._issue("document.multiple_head", "page", url, f"HTML source contains {document.head_count} head elements", edges, {"count": document.head_count}))
+            if document.body_count == 0:
+                result.issues.append(self._issue("document.body_missing", "page", url, "HTML source has no explicit body element", edges))
+            elif document.body_count > 1:
+                result.issues.append(self._issue("document.multiple_body", "page", url, f"HTML source contains {document.body_count} body elements", edges, {"count": document.body_count}))
+            if document.title_count > 1:
+                result.issues.append(self._issue("document.multiple_title", "page", url, f"HTML source contains {document.title_count} title elements", edges, {"count": document.title_count}))
+            if document.meta_description_count > 1:
+                result.issues.append(self._issue("document.multiple_meta_description", "page", url, f"HTML source contains {document.meta_description_count} meta descriptions", edges, {"count": document.meta_description_count}))
+            if document.title_outside_head or document.meta_description_outside_head:
+                result.issues.append(self._issue("document.metadata_outside_head", "page", url, "Title or meta description appears outside the document head", edges, {"title_outside_head": document.title_outside_head, "meta_description_outside_head": document.meta_description_outside_head}))
             if not encoding.http_charset and not encoding.meta_charsets:
                 result.issues.append(self._issue("encoding.missing", "page", url, "HTML response has no HTTP or meta charset declaration", edges))
             if encoding.invalid_charsets:
@@ -678,6 +699,57 @@ class Scanner:
                 result.issues.append(self._issue("social.twitter_card_missing", "page", page.url, "Indexable page has no twitter:card value", edges))
         self._add_duplicate_content_issues(result, pages, edges, "title", "content.duplicate_title")
         self._add_duplicate_content_issues(result, pages, edges, "meta_description", "content.duplicate_meta_description")
+        self._add_duplicate_body_issues(result, pages, edges)
+        self._add_image_delivery_issues(result, pages, edges)
+
+    def _add_duplicate_body_issues(self, result: CrawlResult, pages: list[Page], edges: set[Edge]) -> None:
+        eligible = [page for page in pages if page.word_count >= self.config.min_duplicate_content_words and page.visible_text_hash]
+        exact: dict[str, list[Page]] = {}
+        for page in eligible:
+            exact.setdefault(page.visible_text_hash, []).append(page)
+        exact_pairs: set[frozenset[str]] = set()
+        for digest, matches in exact.items():
+            if len(matches) < 2:
+                continue
+            urls = sorted(page.url for page in matches)
+            for page in matches:
+                result.issues.append(self._issue("content.duplicate_body", "page", page.url, f"Visible content is identical across {len(matches)} indexable pages", edges, {"sha256": digest, "urls": urls}))
+            exact_pairs.update(frozenset((left.url, right.url)) for index, left in enumerate(matches) for right in matches[index + 1:])
+
+        similar: dict[str, set[str]] = {}
+        max_distance = int(64 * (1 - self.config.near_duplicate_similarity))
+        for index, left in enumerate(eligible):
+            if not left.visible_text_fingerprint:
+                continue
+            for right in eligible[index + 1:]:
+                pair = frozenset((left.url, right.url))
+                if pair in exact_pairs or not right.visible_text_fingerprint:
+                    continue
+                distance = (int(left.visible_text_fingerprint, 16) ^ int(right.visible_text_fingerprint, 16)).bit_count()
+                if distance <= max_distance:
+                    similar.setdefault(left.url, set()).add(right.url)
+                    similar.setdefault(right.url, set()).add(left.url)
+        for page in eligible:
+            matches = sorted(similar.get(page.url, set()))
+            if matches:
+                result.issues.append(self._issue("content.near_duplicate_body", "page", page.url, f"Visible content is substantially similar to {len(matches)} other indexable pages", edges, {"similar_urls": matches, "threshold": self.config.near_duplicate_similarity}))
+
+    def _add_image_delivery_issues(self, result: CrawlResult, pages: list[Page], edges: set[Edge]) -> None:
+        resources = {resource.url: resource for resource in result.resources if resource.kind == "image" and resource.status is not None and resource.status < 400}
+        for page in pages:
+            missing_dimensions = sorted({image.url for image in page.images if image.width is None or image.height is None})
+            if missing_dimensions:
+                result.issues.append(self._issue("image.missing_dimensions", "page", page.url, f"Page contains {len(missing_dimensions)} images without positive width and height attributes", edges, {"images": missing_dimensions}))
+            missing_responsive = sorted({
+                image.url for image in page.images
+                if not image.responsive and (resource := resources.get(image.url))
+                and resource.image_width is not None and resource.image_width >= self.config.min_responsive_image_width
+            })
+            if missing_responsive:
+                result.issues.append(self._issue("image.missing_responsive_source", "page", page.url, f"Page loads {len(missing_responsive)} large images without srcset", edges, {"images": missing_responsive, "minimum_width": self.config.min_responsive_image_width}))
+        for resource in resources.values():
+            if resource.bytes >= self.config.min_legacy_image_bytes and resource.image_format.lower() in {"jpeg", "png", "gif", "bmp", "tiff"}:
+                result.issues.append(self._issue("image.legacy_format", "resource", resource.url, f"{resource.bytes}-byte image is served as {resource.image_format}", edges, {"bytes": resource.bytes, "format": resource.image_format, "threshold": self.config.min_legacy_image_bytes}))
 
     def _add_duplicate_content_issues(self, result: CrawlResult, pages: list[Page], edges: set[Edge], attribute: str, rule_id: str) -> None:
         groups: dict[str, list[Page]] = {}

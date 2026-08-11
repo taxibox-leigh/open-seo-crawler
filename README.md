@@ -438,6 +438,13 @@ Document encoding checks retain HTTP and HTML charset declarations, use valid
 declarations for decoding, and report missing, invalid, conflicting or late meta
 charset values.
 
+Page-quality analysis fingerprints normalized visible text to identify exact and
+near-duplicate indexable pages. Source-level document checks report missing or
+duplicate head/body elements, duplicate titles and descriptions, and misplaced
+metadata. Image delivery checks retain declared dimensions and responsive-source
+usage, then identify layout-risk images, large non-responsive sources and large
+legacy-format payloads.
+
 Optional rendered diagnostics retain a bounded network waterfall for each sampled
 page, including response status, resource type and transferred bytes. Reports flag
 excessive request counts, excessive transfer weight and truncated inventories.

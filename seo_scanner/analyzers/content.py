@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from dataclasses import dataclass, field
 
 from bs4 import BeautifulSoup
@@ -22,6 +23,8 @@ class PageContent:
     twitter_card: str = ""
     twitter_image: str = ""
     images: list[ImageReference] = field(default_factory=list)
+    visible_text_hash: str = ""
+    visible_text_fingerprint: str = ""
 
 
 def extract_page_content(html: str, base_url: str = "") -> PageContent:
@@ -42,12 +45,25 @@ def extract_page_content(html: str, base_url: str = "") -> PageContent:
         raw_url = image.get("src") or image.get("data-src") or image.get("data-lazy-src") or _first_srcset(image.get("srcset") or image.get("data-srcset") or "")
         image_url = normalize_url(base_url, str(raw_url)) if raw_url else None
         if image_url:
-            images.append(ImageReference(image_url, str(image.get("alt", "")) if image.has_attr("alt") else None))
+            picture = image.find_parent("picture")
+            images.append(ImageReference(
+                image_url,
+                str(image.get("alt", "")) if image.has_attr("alt") else None,
+                _positive_int(image.get("width")), _positive_int(image.get("height")),
+                bool(image.get("srcset") or image.get("data-srcset") or (picture and picture.select_one("source[srcset], source[data-srcset]"))),
+            ))
     for element in soup(["script", "style", "noscript", "template", "svg"]):
         element.decompose()
     text = soup.get_text(" ", strip=True)
     words = re.findall(r"[^\W_]+(?:[’'-][^\W_]+)*", text, re.UNICODE)
-    return PageContent(title, meta_description, h1s, len(words), viewport, og_title, og_description, og_image, twitter_card, twitter_image, images)
+    normalized_words = [word.casefold() for word in words]
+    normalized_text = " ".join(normalized_words)
+    return PageContent(
+        title, meta_description, h1s, len(words), viewport, og_title,
+        og_description, og_image, twitter_card, twitter_image, images,
+        hashlib.sha256(normalized_text.encode("utf-8")).hexdigest() if normalized_text else "",
+        _simhash(normalized_words),
+    )
 
 
 def _meta(soup: BeautifulSoup, attribute: str, value: str) -> str:
@@ -60,3 +76,23 @@ def _meta(soup: BeautifulSoup, attribute: str, value: str) -> str:
 
 def _first_srcset(value: str) -> str:
     return value.split(",", 1)[0].strip().split(" ", 1)[0]
+
+
+def _positive_int(value: object) -> int | None:
+    try:
+        parsed = int(str(value))
+        return parsed if parsed > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _simhash(words: list[str]) -> str:
+    if not words:
+        return ""
+    tokens = [" ".join(words[index:index + 3]) for index in range(max(1, len(words) - 2))]
+    weights = [0] * 64
+    for token in tokens:
+        digest = int.from_bytes(hashlib.sha256(token.encode("utf-8")).digest()[:8], "big")
+        for bit in range(64):
+            weights[bit] += 1 if digest & (1 << bit) else -1
+    return f"{sum(1 << bit for bit, weight in enumerate(weights) if weight >= 0):016x}"

@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.20"
+SCHEMA_VERSION = "1.21"
 
 
 @dataclass(frozen=True)
@@ -17,6 +17,9 @@ class HreflangReference:
 class ImageReference:
     url: str
     alt: str | None = None
+    width: int | None = None
+    height: int | None = None
+    responsive: bool = False
 
 
 @dataclass
@@ -81,6 +84,12 @@ class Page:
     content_languages: list[str] = field(default_factory=list)
     http_charset: str = ""
     meta_charsets: list[str] = field(default_factory=list)
+    visible_text_hash: str = ""
+    visible_text_fingerprint: str = ""
+    document_head_count: int = 0
+    document_body_count: int = 0
+    title_count: int = 0
+    meta_description_count: int = 0
 
 
 @dataclass
