@@ -483,7 +483,9 @@ duplicate titles/descriptions. Length and word-count thresholds are configurable
 When sitemap discovery is enabled, the scanner also retains robots.txt status,
 size, syntax errors, and the configured crawler policy. It reports fetched pages
 and browser resources disallowed for that crawler using longest-match Allow/
-Disallow precedence with `*` and terminal `$` pattern support.
+Disallow precedence with `*` and terminal `$` pattern support. Canonical,
+hreflang and sitemap targets blocked by that policy receive context-specific
+findings rather than appearing only as generic blocked URLs.
 HTML downloads have an independent byte cap in addition to the whole-crawl
 budget. Reports distinguish per-page truncation from total-byte exhaustion and
 retain declared bytes. Configurable findings cover oversized HTML, slow page

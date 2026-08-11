@@ -194,6 +194,23 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(result.robots.blocked_pages, ["https://example.com/private/page"])
         self.assertEqual(result.robots.blocked_resources, ["https://example.com/private/app.js"])
 
+    def test_robots_findings_cover_declared_blocked_targets(self) -> None:
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.sitemaps = [SitemapDocument("https://example.com/sitemap.xml", 200, "urlset", ["https://example.com/private/sitemap-page"])]
+        edges = {
+            Edge("https://example.com/source", "https://example.com/private/canonical", "link.canonical"),
+            Edge("https://example.com/source", "https://example.com/private/regional", "link.hreflang:en-AU"),
+            Edge("https://example.com/source", "https://example.com/public", "link.canonical"),
+        }
+        policy = parse_robots("https://example.com/robots.txt", b"User-agent: *\nDisallow: /private/", "Googlebot")
+        Scanner()._add_robots_issues(result, edges, policy)
+        self.assertEqual(
+            {issue.rule_id for issue in result.issues},
+            {"canonical.blocked_target", "hreflang.target_blocked", "sitemap.url_blocked"},
+        )
+        canonical = next(issue for issue in result.issues if issue.rule_id == "canonical.blocked_target")
+        self.assertEqual(canonical.evidence["target_url"], "https://example.com/private/canonical")
+
     def test_page_content_extracts_metadata_headings_and_visible_words(self) -> None:
         content = extract_page_content('''<title> Example title </title><meta NAME="Description" content="A useful summary">
             <meta name="viewport" content="width=device-width"><meta property="og:title" content="Shared title">

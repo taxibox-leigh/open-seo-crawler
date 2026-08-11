@@ -444,6 +444,16 @@ class Scanner:
                 continue
             policy.document.blocked_resources.append(resource.url)
             result.issues.append(self._issue("robots.blocked_resource", "resource", resource.url, f"{policy.document.user_agent} is disallowed from fetching this page resource", edges, {"user_agent": policy.document.user_agent, "kind": resource.kind}))
+        for edge in sorted(edges, key=lambda item: (item.context, item.source_url, item.target_url)):
+            if policy.allows(edge.target_url):
+                continue
+            if edge.context == "link.canonical":
+                result.issues.append(self._issue("canonical.blocked_target", "page", edge.source_url, "Canonical target is disallowed by robots.txt", edges, {"target_url": edge.target_url, "user_agent": policy.document.user_agent}))
+            elif edge.context.startswith("link.hreflang:"):
+                result.issues.append(self._issue("hreflang.target_blocked", "page", edge.source_url, "Hreflang target is disallowed by robots.txt", edges, {"target_url": edge.target_url, "language": edge.context.partition(":")[2], "user_agent": policy.document.user_agent}))
+        for url in sorted({url for sitemap in result.sitemaps for url in sitemap.urls}):
+            if not policy.allows(url):
+                result.issues.append(self._issue("sitemap.url_blocked", "page", url, "Sitemap URL is disallowed by robots.txt", edges, {"user_agent": policy.document.user_agent}))
 
     def _fetch_resource(self, fetcher: Fetcher, result: CrawlResult, start_url: str, url: str, kind: str, pending: dict[str, str], edges: set[Edge], remaining_total_bytes: int) -> tuple[list[str], bool]:
         discovered_urls: list[str] = []
