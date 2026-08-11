@@ -477,6 +477,10 @@ Missing social/mobile declarations and absent image alt attributes are reported
 for indexable pages; explicit empty alt text remains valid for decorative images.
 Same-origin Open Graph and Twitter images join the resource inventory, so their
 status, redirects, MIME type, size, caching, and decodability are verified too.
+JSON-LD checks go beyond JSON syntax without embedding search-vendor policies:
+root objects/arrays and JSON-LD keyword value shapes are validated, typed blocks
+without a context are identified, and local fragment references are checked for
+a definition elsewhere on the page.
 For scheduled batch environments, `Dockerfile.scanner` provides the same command
 in a non-root, stateless image; see `docs/SCANNER_CONTAINER.md` for baseline and
 output mount examples.

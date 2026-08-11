@@ -153,6 +153,8 @@ class Scanner:
             truncated=response.truncated, redirect_hops=response.redirect_hops, canonical_url=signals.canonical_url,
             robots_directives=signals.robots_directives, invalid_robots_directives=signals.invalid_robots_directives,
             jsonld_errors=signals.jsonld_errors, jsonld_blocks=signals.jsonld_blocks,
+            jsonld_integrity_errors=signals.jsonld_integrity_errors,
+            jsonld_integrity_warnings=signals.jsonld_integrity_warnings,
             hreflang=signals.hreflang, declared_bytes=response.declared_bytes,
             viewport=content.viewport, og_title=content.og_title,
             og_description=content.og_description, og_image=content.og_image,
@@ -190,6 +192,14 @@ class Scanner:
             result.issues.append(self._issue("structured_data.invalid_jsonld", "page", url, "One or more JSON-LD blocks are invalid", edges, {"errors": signals.jsonld_errors}))
         if signals.duplicate_jsonld_blocks:
             result.issues.append(self._issue("structured_data.duplicate_jsonld", "page", url, "Identical JSON-LD script blocks appear more than once", edges, {"duplicates": signals.duplicate_jsonld_blocks}))
+        if signals.jsonld_integrity_errors:
+            result.issues.append(self._issue("structured_data.invalid_shape", "page", url, "JSON-LD contains structurally invalid keyword values", edges, {"errors": signals.jsonld_integrity_errors}))
+        missing_context = [item for item in signals.jsonld_integrity_warnings if "no @context" in item]
+        if missing_context:
+            result.issues.append(self._issue("structured_data.missing_context", "page", url, "Typed JSON-LD has no declared context", edges, {"warnings": missing_context}))
+        unresolved = [item for item in signals.jsonld_integrity_warnings if "no definition" in item]
+        if unresolved:
+            result.issues.append(self._issue("structured_data.unresolved_fragment", "page", url, "JSON-LD references undefined local identifiers", edges, {"warnings": unresolved}))
 
     def _queue_page_discoveries(self, state: _RunState, final_url: str, html: str, signals: PageSignals, content: PageContent) -> None:
         links, resources, found_edges = discover_html(final_url, html)

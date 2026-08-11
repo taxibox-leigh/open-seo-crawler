@@ -295,6 +295,18 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(signals.jsonld_blocks[0]["types"], ["Organization", "Thing", "WebSite"])
         self.assertEqual(signals.duplicate_jsonld_blocks, [{"block_indices": [1, 2], "types": ["Organization", "Thing", "WebSite"]}])
 
+    def test_jsonld_structural_integrity_and_local_references(self) -> None:
+        signals = extract_page_signals(
+            "https://example.com/",
+            '''<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@id":"#thing","@type":[]},{"@id":"#missing"}]}</script>
+            <script type="application/ld+json">{"@type":"Article"}</script>
+            <script type="application/ld+json">42</script>''',
+        )
+        self.assertTrue(any("@type must" in item for item in signals.jsonld_integrity_errors))
+        self.assertTrue(any("root must" in item for item in signals.jsonld_integrity_errors))
+        self.assertIn("Block 2: typed data has no @context", signals.jsonld_integrity_warnings)
+        self.assertIn("Local @id reference #missing has no definition on the page", signals.jsonld_integrity_warnings)
+
     def test_sitemap_parser_rejects_unsupported_or_oversized_xml(self) -> None:
         unsupported = parse_sitemap("https://example.com/sitemap.xml", b"<rss></rss>")
         self.assertIn("Unsupported root element", unsupported.errors[0])
@@ -394,7 +406,7 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.13")
+        self.assertEqual(report["schema_version"], "1.14")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
 
