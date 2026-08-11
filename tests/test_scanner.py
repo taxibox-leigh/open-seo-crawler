@@ -350,6 +350,41 @@ class UnitTests(unittest.TestCase):
         finally:
             fetcher.close()
 
+    def test_bounded_retries_and_specific_fetch_failures(self) -> None:
+        transient = FetchResponse("https://example.com/", "https://example.com/", 503, "text/plain", b"busy", 4, 1, [], False, {})
+        recovered = FetchResponse("https://example.com/", "https://example.com/", 200, "text/html", b"<html><head></head><body>ok</body></html>", 40, 1, [], False, {})
+
+        class SequenceFetcher:
+            def __init__(self, values):
+                self.values = list(values)
+
+            def get(self, *_):
+                value = self.values.pop(0)
+                if isinstance(value, Exception):
+                    raise value
+                return value
+
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        state = _RunState(result.start_url, result, float("inf"), deque(), set())
+        scanner = Scanner(ScannerConfig(max_fetch_attempts=3, retry_backoff_seconds=0, max_retry_after_seconds=0))
+        scanner._fetch_page(SequenceFetcher([transient, recovered]), state, result.start_url)
+        self.assertEqual(result.pages[0].fetch_attempts, 2)
+        self.assertEqual(result.coverage.bytes_downloaded, len(transient.body) + len(recovered.body))
+        self.assertNotIn("page.http_error", {issue.rule_id for issue in result.issues})
+
+        failed = CrawlResult(start_url="https://example.com/", started_at="now")
+        failed_state = _RunState(failed.start_url, failed, float("inf"), deque(), set())
+        scanner._fetch_page(SequenceFetcher([requests.exceptions.SSLError("certificate failed")]), failed_state, failed.start_url)
+        self.assertEqual([issue.rule_id for issue in failed.issues], ["page.tls_error"])
+        self.assertEqual(failed.issues[0].evidence["attempts"], 1)
+
+        resource_result = CrawlResult(start_url="https://example.com/", started_at="now")
+        scanner._fetch_resource(
+            SequenceFetcher([transient, recovered]), resource_result, resource_result.start_url,
+            "https://example.com/app.js", "script", {}, set(), 1000,
+        )
+        self.assertEqual(resource_result.resources[0].fetch_attempts, 2)
+
     def test_rendered_network_thresholds_and_truncation_emit_findings(self) -> None:
         rendered = RenderedPage(
             "https://example.com/", request_count=3, transfer_bytes=301,
@@ -754,7 +789,7 @@ class IntegrationTests(unittest.TestCase):
             ndjson = [json.loads(line) for line in ndjson_output.read_text(encoding="utf-8").splitlines()]
             sarif = json.loads(sarif_output.read_text(encoding="utf-8"))
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.23")
+        self.assertEqual(report["schema_version"], "1.24")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
         self.assertEqual(ndjson[0]["type"], "scan")

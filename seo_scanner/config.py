@@ -60,9 +60,12 @@ class ScannerConfig:
     min_internal_inlinks: int = 2
     min_site_pages_for_link_metrics: int = 5
     max_soft_404_words: int = 100
+    max_fetch_attempts: int = 3
+    retry_backoff_seconds: float = 0.5
+    max_retry_after_seconds: float = 10.0
 
     def __post_init__(self) -> None:
-        positive = ("max_pages", "max_resources", "max_total_bytes", "max_resource_bytes", "max_resource_size", "max_image_width", "max_image_height", "min_compression_bytes", "min_cache_seconds", "max_sitemaps", "max_urls_per_sitemap", "max_sitemap_bytes", "max_external_links", "max_link_bytes", "timeout_seconds", "max_duration_seconds", "max_rendered_pages", "render_navigation_timeout_ms", "max_render_events_per_page", "max_render_network_requests_per_page", "max_render_request_count", "max_render_transfer_bytes", "max_accessibility_violations_per_page", "max_accessibility_nodes_per_violation", "max_click_depth", "max_title_chars", "max_meta_description_chars", "min_content_words", "max_robots_bytes", "max_page_bytes", "max_page_size", "max_page_duration_ms", "max_url_chars", "max_query_parameters", "min_duplicate_content_words", "min_responsive_image_width", "min_legacy_image_bytes", "min_title_chars", "min_meta_description_chars", "min_internal_inlinks", "min_site_pages_for_link_metrics", "max_soft_404_words")
+        positive = ("max_pages", "max_resources", "max_total_bytes", "max_resource_bytes", "max_resource_size", "max_image_width", "max_image_height", "min_compression_bytes", "min_cache_seconds", "max_sitemaps", "max_urls_per_sitemap", "max_sitemap_bytes", "max_external_links", "max_link_bytes", "timeout_seconds", "max_duration_seconds", "max_rendered_pages", "render_navigation_timeout_ms", "max_render_events_per_page", "max_render_network_requests_per_page", "max_render_request_count", "max_render_transfer_bytes", "max_accessibility_violations_per_page", "max_accessibility_nodes_per_violation", "max_click_depth", "max_title_chars", "max_meta_description_chars", "min_content_words", "max_robots_bytes", "max_page_bytes", "max_page_size", "max_page_duration_ms", "max_url_chars", "max_query_parameters", "min_duplicate_content_words", "min_responsive_image_width", "min_legacy_image_bytes", "min_title_chars", "min_meta_description_chars", "min_internal_inlinks", "min_site_pages_for_link_metrics", "max_soft_404_words", "max_fetch_attempts")
         for name in positive:
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be greater than zero")
@@ -84,6 +87,8 @@ class ScannerConfig:
             raise ValueError("min_title_chars must not exceed max_title_chars")
         if self.min_meta_description_chars > self.max_meta_description_chars:
             raise ValueError("min_meta_description_chars must not exceed max_meta_description_chars")
+        if self.retry_backoff_seconds < 0 or self.max_retry_after_seconds < 0:
+            raise ValueError("retry delays must not be negative")
         if not 0 < self.near_duplicate_similarity <= 1:
             raise ValueError("near_duplicate_similarity must be greater than zero and at most one")
 

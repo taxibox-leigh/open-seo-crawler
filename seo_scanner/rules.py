@@ -15,6 +15,9 @@ RULES = {
     rule.id: rule
     for rule in (
         Rule("resource.fetch_failed", "Resource could not be fetched", "error", "Restore the resource or remove/update every reference to it."),
+        Rule("resource.timeout", "Resource request timed out", "error", "Restore timely delivery of the resource or update its references."),
+        Rule("resource.tls_error", "Resource has a TLS connection error", "error", "Repair the certificate and TLS configuration for the resource host."),
+        Rule("resource.redirect_loop", "Resource has a redirect loop", "error", "Replace the redirect cycle with one direct resource URL."),
         Rule("resource.http_error", "Resource returns an HTTP error", "error", "Serve a successful resource response or update its referring pages."),
         Rule("resource.redirect", "Resource redirects", "warning", "Reference the final resource URL directly."),
         Rule("resource.mime_mismatch", "Resource MIME type does not match its use", "error", "Return the expected Content-Type and resource body."),
@@ -29,6 +32,10 @@ RULES = {
         Rule("resource.duplicate_payload", "Multiple resource URLs return identical content", "info", "Consolidate duplicate assets where separate URLs are unnecessary."),
         Rule("crawl.limit_reached", "Crawl stopped at a configured limit", "error", "Increase the limit or reduce crawl scope so the audit covers the whole site."),
         Rule("page.fetch_failed", "Page could not be fetched", "error", "Restore the page or remove links to it."),
+        Rule("page.http_error", "Page returns an HTTP error", "error", "Restore the page or remove it from crawl entry points, internal links and sitemaps."),
+        Rule("page.timeout", "Page request timed out", "error", "Restore timely server responses and investigate origin or network latency."),
+        Rule("page.tls_error", "Page has a TLS connection error", "error", "Repair the certificate and TLS configuration for the page host."),
+        Rule("page.redirect_loop", "Page has a redirect loop", "error", "Replace the redirect cycle with one direct destination."),
         Rule("link.http_error", "Internal link target returns an HTTP error", "error", "Restore the target or update every internal link that references it."),
         Rule("link.redirect", "Internal link target redirects", "warning", "Update internal links to point directly to the final URL."),
         Rule("link.insecure_internal", "HTTPS page links to an insecure internal URL", "warning", "Update the internal link to use the HTTPS destination directly."),

@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.23"
+SCHEMA_VERSION = "1.24"
 
 
 @dataclass(frozen=True)
@@ -103,6 +103,7 @@ class Page:
     html_robots_directives: list[str] = field(default_factory=list)
     links: list[LinkReference] = field(default_factory=list)
     heading_levels: list[int] = field(default_factory=list)
+    fetch_attempts: int = 1
 
 
 @dataclass
@@ -124,6 +125,7 @@ class Resource:
     image_height: int | None = None
     image_format: str = ""
     content_hash: str = ""
+    fetch_attempts: int = 1
 
 
 @dataclass(frozen=True)

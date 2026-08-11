@@ -457,6 +457,12 @@ and pages with no outgoing internal navigation. Page semantics also include shor
 metadata, duplicate primary headings, skipped heading levels and conservative
 soft-404 detection.
 
+Page and resource fetching retries transient connection failures and HTTP 408,
+425, 429 and selected 5xx responses within configurable attempt, byte and wall-time
+bounds. Inventories retain attempt counts and total elapsed time, while terminal
+timeouts, TLS failures and redirect loops receive specific findings. Every fetched
+page HTTP error is reported even when the URL was not discovered through a link.
+
 Optional rendered diagnostics retain a bounded network waterfall for each sampled
 page, including response status, resource type and transferred bytes. Reports flag
 excessive request counts, excessive transfer weight and truncated inventories.
