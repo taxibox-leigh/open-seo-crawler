@@ -450,6 +450,12 @@ to the requested output path. The existing Flask application remains available
 and unchanged while the scanner is integrated incrementally.
 
 Install the CLI with `pip install .` to expose the `open-seo-scanner` command.
+Optional rendered diagnostics use a bounded Playwright sample and are disabled by
+default. Install them with `pip install '.[render]' && playwright install chromium`,
+then set `render_enabled` in the JSON configuration. `max_rendered_pages`,
+`render_navigation_timeout_ms`, `render_settle_ms`, and
+`max_render_events_per_page` bound browser work and retained evidence. Browser
+setup or page failures are reported without changing raw crawl completeness.
 For scheduled batch environments, `Dockerfile.scanner` provides the same command
 in a non-root, stateless image; see `docs/SCANNER_CONTAINER.md` for baseline and
 output mount examples.

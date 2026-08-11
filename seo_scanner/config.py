@@ -27,14 +27,21 @@ class ScannerConfig:
     max_duration_seconds: float = 3600.0
     user_agent: str = "open-seo-crawler/0.1 (+https://github.com/puneetindersingh/open-seo-crawler)"
     follow_external_resources: bool = False
+    render_enabled: bool = False
+    max_rendered_pages: int = 25
+    render_navigation_timeout_ms: int = 30000
+    render_settle_ms: int = 1000
+    max_render_events_per_page: int = 50
 
     def __post_init__(self) -> None:
-        positive = ("max_pages", "max_resources", "max_total_bytes", "max_resource_bytes", "max_resource_size", "max_image_width", "max_image_height", "min_compression_bytes", "min_cache_seconds", "max_sitemaps", "max_urls_per_sitemap", "max_sitemap_bytes", "max_external_links", "max_link_bytes", "timeout_seconds", "max_duration_seconds")
+        positive = ("max_pages", "max_resources", "max_total_bytes", "max_resource_bytes", "max_resource_size", "max_image_width", "max_image_height", "min_compression_bytes", "min_cache_seconds", "max_sitemaps", "max_urls_per_sitemap", "max_sitemap_bytes", "max_external_links", "max_link_bytes", "timeout_seconds", "max_duration_seconds", "max_rendered_pages", "render_navigation_timeout_ms", "max_render_events_per_page")
         for name in positive:
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be greater than zero")
         if self.external_delay_seconds < 0:
             raise ValueError("external_delay_seconds must not be negative")
+        if self.render_settle_ms < 0:
+            raise ValueError("render_settle_ms must not be negative")
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "ScannerConfig":

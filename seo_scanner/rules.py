@@ -62,6 +62,10 @@ RULES = {
         Rule("external_link.fetch_failed", "External link could not be checked", "warning", "Verify the destination manually or update/remove the link."),
         Rule("external_link.http_error", "External link target returns an HTTP error", "warning", "Update or remove the external link."),
         Rule("external_link.redirect", "External link target redirects", "info", "Link directly to the final destination where practical."),
+        Rule("render.unavailable", "Rendered diagnostics are unavailable", "warning", "Install the optional browser dependency and its Chromium runtime, or disable rendered diagnostics."),
+        Rule("render.navigation_failed", "Page failed during browser rendering", "error", "Restore the page and its browser execution path, then rerun rendered diagnostics."),
+        Rule("render.failed_requests", "Browser rendering encountered failed requests", "warning", "Restore or update failed requests that affect the rendered page."),
+        Rule("render.console_errors", "Browser rendering emitted console errors", "warning", "Resolve actionable browser console errors and verify the page still renders correctly."),
     )
 }
 
