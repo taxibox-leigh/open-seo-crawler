@@ -82,6 +82,10 @@ RULES = {
         Rule("robots.invalid_syntax", "robots.txt contains malformed directives", "warning", "Correct malformed robots.txt lines so crawlers interpret the intended policy."),
         Rule("robots.blocked_page", "Page is blocked by robots.txt", "error", "Allow crawling for the configured search crawler or remove the page from internal discovery and sitemaps."),
         Rule("robots.blocked_resource", "Page resource is blocked by robots.txt", "warning", "Allow crawling of resources required to render and understand indexable pages."),
+        Rule("page.oversized", "HTML page exceeds the configured size threshold", "warning", "Reduce generated HTML and remove unnecessary inline markup or data."),
+        Rule("page.slow_response", "Page response exceeds the configured duration", "warning", "Reduce server response time and investigate slow application or origin work."),
+        Rule("page.response_truncated", "Page exceeded the download byte limit", "error", "Reduce the HTML response or raise the safe per-page byte limit."),
+        Rule("page.redirect_chain", "Page uses a multi-hop redirect chain", "warning", "Redirect directly to the final canonical destination in one hop."),
     )
 }
 

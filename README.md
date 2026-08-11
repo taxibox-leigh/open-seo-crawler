@@ -468,6 +468,10 @@ When sitemap discovery is enabled, the scanner also retains robots.txt status,
 size, syntax errors, and the configured crawler policy. It reports fetched pages
 and browser resources disallowed for that crawler using longest-match Allow/
 Disallow precedence with `*` and terminal `$` pattern support.
+HTML downloads have an independent byte cap in addition to the whole-crawl
+budget. Reports distinguish per-page truncation from total-byte exhaustion and
+retain declared bytes. Configurable findings cover oversized HTML, slow page
+responses, and multi-hop page redirect chains.
 For scheduled batch environments, `Dockerfile.scanner` provides the same command
 in a non-root, stateless image; see `docs/SCANNER_CONTAINER.md` for baseline and
 output mount examples.

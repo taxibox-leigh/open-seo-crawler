@@ -18,7 +18,7 @@ from seo_scanner.analyzers.robots import parse_robots
 from seo_scanner.baseline import apply_suppressions, compare_with_baseline
 from seo_scanner.config import ScannerConfig
 from seo_scanner.discovery import discover_css, discover_html
-from seo_scanner.fetch import Fetcher
+from seo_scanner.fetch import Fetcher, FetchResponse
 from seo_scanner.runner import Scanner, _is_browser_subresource
 from seo_scanner.scope import normalize_url
 from seo_scanner.models import CrawlResult, Edge, Issue, Page, Resource, SitemapDocument
@@ -312,9 +312,34 @@ class UnitTests(unittest.TestCase):
             ScannerConfig.from_dict({"surprise": True})
         with self.assertRaises(ValueError):
             ScannerConfig(max_pages=0)
+        with self.assertRaises(ValueError):
+            ScannerConfig(max_page_bytes=100, max_page_size=101)
+
+    def test_page_transport_rules_cover_size_speed_and_redirect_chains(self) -> None:
+        response = FetchResponse(
+            "https://example.com/old", "https://example.com/final", 200,
+            "text/html", b"body", 500, 4000,
+            ["https://example.com/old", "https://example.com/hop", "https://example.com/final"],
+            False, {},
+        )
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        scanner = Scanner(ScannerConfig(max_page_size=100, max_page_duration_ms=100))
+        scanner._add_page_response_issues(result, response.requested_url, response, extract_page_signals(response.final_url, "", ""), set())
+        self.assertEqual(
+            {issue.rule_id for issue in result.issues},
+            {"page.oversized", "page.slow_response", "page.redirect_chain"},
+        )
 
 
 class IntegrationTests(unittest.TestCase):
+    def test_per_page_byte_cap_is_distinct_from_total_byte_budget(self) -> None:
+        with FixtureServer() as url:
+            result = Scanner(ScannerConfig(max_page_bytes=32, max_page_size=32, max_total_bytes=1_000_000)).scan(url)
+        self.assertEqual(result.status, "partial")
+        self.assertEqual(result.coverage.limit_reason, "max_page_bytes")
+        self.assertIn("page.response_truncated", {issue.rule_id for issue in result.issues})
+        self.assertNotIn("crawl.limit_reached", {issue.rule_id for issue in result.issues})
+
     def test_complete_resource_scan_and_attribution(self) -> None:
         with FixtureServer() as url:
             result = Scanner(ScannerConfig(max_resource_size=64, min_compression_bytes=10)).scan(url)
@@ -360,7 +385,7 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.11")
+        self.assertEqual(report["schema_version"], "1.12")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
 

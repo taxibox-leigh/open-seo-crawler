@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.11"
+SCHEMA_VERSION = "1.12"
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,7 @@ class Page:
     jsonld_errors: list[str] = field(default_factory=list)
     jsonld_blocks: list[dict[str, Any]] = field(default_factory=list)
     hreflang: list[HreflangReference] = field(default_factory=list)
+    declared_bytes: int | None = None
 
 
 @dataclass
