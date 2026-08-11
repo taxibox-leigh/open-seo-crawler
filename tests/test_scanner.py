@@ -15,6 +15,7 @@ from seo_scanner.analyzers.directives import extract_page_signals
 from seo_scanner.analyzers.sitemap import parse_sitemap
 from seo_scanner.analyzers.hreflang import valid_language_tag
 from seo_scanner.analyzers.robots import parse_robots
+from seo_scanner.analyzers.url_quality import analyze_url
 from seo_scanner.baseline import apply_suppressions, compare_with_baseline
 from seo_scanner.config import ScannerConfig
 from seo_scanner.discovery import discover_css, discover_html
@@ -135,6 +136,21 @@ class FixtureServer:
 
 
 class UnitTests(unittest.TestCase):
+    def test_url_quality_detects_conservative_hygiene_and_trap_signals(self) -> None:
+        url = "https://example.com/Foo_Bar/Foo_Bar?utm_source=test&a=1"
+        quality = analyze_url(url)
+        self.assertTrue(quality.uppercase_path)
+        self.assertTrue(quality.underscore_path)
+        self.assertEqual(quality.repeated_segments, ["Foo_Bar"])
+        self.assertEqual(quality.tracking_parameters, ["utm_source"])
+        self.assertEqual(quality.query_parameter_count, 2)
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        Scanner(ScannerConfig(max_url_chars=10, max_query_parameters=1))._add_url_quality_issues(result, url, quality, set())
+        self.assertEqual(
+            {issue.rule_id for issue in result.issues},
+            {"url.too_long", "url.uppercase_path", "url.underscore_path", "url.excessive_parameters", "url.tracking_parameters", "url.repeated_segments"},
+        )
+
     def test_robots_policy_reports_syntax_and_applies_named_agent_rules(self) -> None:
         policy = parse_robots(
             "https://example.com/robots.txt",
@@ -406,7 +422,7 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.14")
+        self.assertEqual(report["schema_version"], "1.15")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
 

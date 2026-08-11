@@ -481,6 +481,10 @@ JSON-LD checks go beyond JSON syntax without embedding search-vendor policies:
 root objects/arrays and JSON-LD keyword value shapes are validated, typed blocks
 without a context are identified, and local fragment references are checked for
 a definition elsewhere on the page.
+Fetched page URLs retain length and query-parameter counts. Conservative URL
+quality findings cover configurable length/parameter thresholds, tracking
+parameters, uppercase or underscore paths, and adjacent repeated path segments
+that commonly indicate path-relative crawl traps.
 For scheduled batch environments, `Dockerfile.scanner` provides the same command
 in a non-root, stateless image; see `docs/SCANNER_CONTAINER.md` for baseline and
 output mount examples.

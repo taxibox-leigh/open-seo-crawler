@@ -16,6 +16,7 @@ from .analyzers.content import PageContent, extract_page_content
 from .analyzers.directives import PageSignals, extract_page_signals
 from .analyzers.sitemap import parse_sitemap, sitemap_locations_from_robots
 from .analyzers.robots import RobotsPolicy, parse_robots
+from .analyzers.url_quality import UrlQuality, analyze_url
 from .analyzers.hreflang import analyze_hreflang
 from .discovery import DiscoveredResource, discover_css, discover_html
 from .fetch import Fetcher, FetchResponse
@@ -142,6 +143,7 @@ class Scanner:
         html = ""
         signals = PageSignals()
         content = PageContent()
+        url_quality = analyze_url(url)
         if response.status < 400 and response.content_type in ("text/html", "application/xhtml+xml"):
             html = response.body.decode(_encoding(response.content_type), errors="replace")
             signals = extract_page_signals(response.final_url, html, response.headers.get("x-robots-tag", ""))
@@ -159,10 +161,12 @@ class Scanner:
             viewport=content.viewport, og_title=content.og_title,
             og_description=content.og_description, og_image=content.og_image,
             twitter_card=content.twitter_card, twitter_image=content.twitter_image,
-            images=content.images,
+            images=content.images, url_length=url_quality.length,
+            query_parameter_count=url_quality.query_parameter_count,
         ))
         result.coverage.pages_fetched += 1
         self._add_page_response_issues(result, url, response, signals, state.edges)
+        self._add_url_quality_issues(result, url, url_quality, state.edges)
         if html:
             self._queue_page_discoveries(state, response.final_url, html, signals, content)
         if response.truncated:
@@ -200,6 +204,20 @@ class Scanner:
         unresolved = [item for item in signals.jsonld_integrity_warnings if "no definition" in item]
         if unresolved:
             result.issues.append(self._issue("structured_data.unresolved_fragment", "page", url, "JSON-LD references undefined local identifiers", edges, {"warnings": unresolved}))
+
+    def _add_url_quality_issues(self, result: CrawlResult, url: str, quality: UrlQuality, edges: set[Edge]) -> None:
+        if quality.length > self.config.max_url_chars:
+            result.issues.append(self._issue("url.too_long", "page", url, f"URL contains {quality.length} characters", edges, {"characters": quality.length, "threshold": self.config.max_url_chars}))
+        if quality.uppercase_path:
+            result.issues.append(self._issue("url.uppercase_path", "page", url, "URL path contains uppercase characters", edges))
+        if quality.underscore_path:
+            result.issues.append(self._issue("url.underscore_path", "page", url, "URL path contains underscore characters", edges))
+        if quality.query_parameter_count > self.config.max_query_parameters:
+            result.issues.append(self._issue("url.excessive_parameters", "page", url, f"URL contains {quality.query_parameter_count} query parameters", edges, {"count": quality.query_parameter_count, "threshold": self.config.max_query_parameters}))
+        if quality.tracking_parameters:
+            result.issues.append(self._issue("url.tracking_parameters", "page", url, "URL contains tracking parameters", edges, {"parameters": quality.tracking_parameters}))
+        if quality.repeated_segments:
+            result.issues.append(self._issue("url.repeated_segments", "page", url, "URL repeats adjacent path segments", edges, {"segments": quality.repeated_segments}))
 
     def _queue_page_discoveries(self, state: _RunState, final_url: str, html: str, signals: PageSignals, content: PageContent) -> None:
         links, resources, found_edges = discover_html(final_url, html)

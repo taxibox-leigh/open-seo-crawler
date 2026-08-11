@@ -42,9 +42,11 @@ class ScannerConfig:
     max_page_bytes: int = 10_000_000
     max_page_size: int = 2_000_000
     max_page_duration_ms: int = 3000
+    max_url_chars: int = 115
+    max_query_parameters: int = 3
 
     def __post_init__(self) -> None:
-        positive = ("max_pages", "max_resources", "max_total_bytes", "max_resource_bytes", "max_resource_size", "max_image_width", "max_image_height", "min_compression_bytes", "min_cache_seconds", "max_sitemaps", "max_urls_per_sitemap", "max_sitemap_bytes", "max_external_links", "max_link_bytes", "timeout_seconds", "max_duration_seconds", "max_rendered_pages", "render_navigation_timeout_ms", "max_render_events_per_page", "max_click_depth", "max_title_chars", "max_meta_description_chars", "min_content_words", "max_robots_bytes", "max_page_bytes", "max_page_size", "max_page_duration_ms")
+        positive = ("max_pages", "max_resources", "max_total_bytes", "max_resource_bytes", "max_resource_size", "max_image_width", "max_image_height", "min_compression_bytes", "min_cache_seconds", "max_sitemaps", "max_urls_per_sitemap", "max_sitemap_bytes", "max_external_links", "max_link_bytes", "timeout_seconds", "max_duration_seconds", "max_rendered_pages", "render_navigation_timeout_ms", "max_render_events_per_page", "max_click_depth", "max_title_chars", "max_meta_description_chars", "min_content_words", "max_robots_bytes", "max_page_bytes", "max_page_size", "max_page_duration_ms", "max_url_chars", "max_query_parameters")
         for name in positive:
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be greater than zero")
