@@ -54,6 +54,9 @@ def _render_page(browser: Any, url: str, config: ScannerConfig) -> RenderedPage:
     started = time.monotonic()
     console_errors: list[str] = []
     failed_requests: list[dict[str, Any]] = []
+    responses: list[Any] = []
+    request_count = 0
+    network_requests_truncated = False
     page = browser.new_page()
 
     def on_console(message: Any) -> None:
@@ -66,15 +69,27 @@ def _render_page(browser: Any, url: str, config: ScannerConfig) -> RenderedPage:
             error_text = failure.get("errorText", "") if isinstance(failure, dict) else str(failure or "")
             failed_requests.append({"url": request.url, "error": error_text})
 
+    def on_request(_: Any) -> None:
+        nonlocal request_count
+        request_count += 1
+
     def on_response(response: Any) -> None:
+        nonlocal network_requests_truncated
+        if len(responses) < config.max_render_network_requests_per_page:
+            responses.append(response)
+        else:
+            network_requests_truncated = True
         if response.status >= 400 and len(failed_requests) < config.max_render_events_per_page:
             failed_requests.append({"url": response.url, "status": response.status})
 
     page.on("console", on_console)
+    page.on("request", on_request)
     page.on("requestfailed", on_request_failed)
     page.on("response", on_response)
     error = ""
     final_url = ""
+    network_requests: list[dict[str, Any]] = []
+    transfer_bytes = 0
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=config.render_navigation_timeout_ms)
         if config.render_settle_ms:
@@ -84,6 +99,20 @@ def _render_page(browser: Any, url: str, config: ScannerConfig) -> RenderedPage:
         error = str(exc)
         final_url = getattr(page, "url", "")
     finally:
+        for response in responses:
+            sizes: dict[str, int] = {}
+            try:
+                sizes = response.request.sizes()
+            except Exception:
+                pass
+            transferred = max(0, sizes.get("responseBodySize", 0)) + max(0, sizes.get("responseHeadersSize", 0))
+            transfer_bytes += transferred
+            network_requests.append({
+                "url": response.url,
+                "status": response.status,
+                "resource_type": getattr(response.request, "resource_type", ""),
+                "transfer_bytes": transferred,
+            })
         page.close()
     return RenderedPage(
         url=url,
@@ -91,5 +120,9 @@ def _render_page(browser: Any, url: str, config: ScannerConfig) -> RenderedPage:
         duration_ms=round((time.monotonic() - started) * 1000),
         console_errors=console_errors,
         failed_requests=failed_requests,
+        network_requests=network_requests,
+        request_count=request_count,
+        transfer_bytes=transfer_bytes,
+        network_requests_truncated=network_requests_truncated,
         error=error,
     )

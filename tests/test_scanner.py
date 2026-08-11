@@ -5,6 +5,7 @@ import threading
 import unittest
 import requests
 from collections import deque
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -23,7 +24,7 @@ from seo_scanner.discovery import discover_css, discover_html
 from seo_scanner.fetch import Fetcher, FetchResponse
 from seo_scanner.runner import Scanner, _RunState, _is_browser_subresource
 from seo_scanner.scope import normalize_url
-from seo_scanner.models import CrawlResult, Edge, ImageReference, Issue, Page, Resource, SitemapDocument
+from seo_scanner.models import CrawlResult, Edge, ImageReference, Issue, Page, RenderedPage, Resource, SitemapDocument
 from seo_scanner.render import render_pages, select_render_urls
 
 
@@ -35,6 +36,15 @@ class FakeMessage:
 class FakeResponse:
     url = "https://example.com/missing.js"
     status = 404
+    request = None
+
+    def __init__(self) -> None:
+        self.request = self
+
+    resource_type = "script"
+
+    def sizes(self) -> dict[str, int]:
+        return {"responseBodySize": 120, "responseHeadersSize": 30}
 
 
 class FakePage:
@@ -48,7 +58,9 @@ class FakePage:
     def goto(self, url, **_) -> None:
         self.url = url + "rendered"
         self.handlers["console"](FakeMessage())
-        self.handlers["response"](FakeResponse())
+        response = FakeResponse()
+        self.handlers["request"](response.request)
+        self.handlers["response"](response)
 
     def wait_for_timeout(self, _) -> None:
         pass
@@ -247,6 +259,9 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(pages[0].final_url, "https://example.com/arendered")
         self.assertEqual(pages[0].console_errors, ["Uncaught example"])
         self.assertEqual(pages[0].failed_requests[0]["status"], 404)
+        self.assertEqual(pages[0].request_count, 1)
+        self.assertEqual(pages[0].transfer_bytes, 150)
+        self.assertEqual(pages[0].network_requests[0]["resource_type"], "script")
 
     def test_fetcher_only_advertises_decodable_content_encodings(self) -> None:
         fetcher = Fetcher("scanner-test", 10)
@@ -258,6 +273,22 @@ class UnitTests(unittest.TestCase):
             self.assertEqual(fetcher.session.headers["User-Agent"], "scanner-test")
         finally:
             fetcher.close()
+
+    def test_rendered_network_thresholds_and_truncation_emit_findings(self) -> None:
+        rendered = RenderedPage(
+            "https://example.com/", request_count=3, transfer_bytes=301,
+            network_requests=[{"url": "https://example.com/app.js", "status": 200, "resource_type": "script", "transfer_bytes": 301}],
+            network_requests_truncated=True,
+        )
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1)]
+        scanner = Scanner(ScannerConfig(render_enabled=True, max_render_request_count=2, max_render_transfer_bytes=300))
+        with patch("seo_scanner.runner.render_pages", return_value=([rendered], "")):
+            scanner._run_rendered_diagnostics(result)
+        self.assertEqual(
+            {issue.rule_id for issue in result.issues},
+            {"render.excessive_requests", "render.excessive_transfer", "render.network_inventory_truncated"},
+        )
 
     def test_url_normalization(self) -> None:
         self.assertEqual(normalize_url("https://EXAMPLE.com/a/", "../img.png#x"), "https://example.com/img.png")
@@ -479,7 +510,7 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.16")
+        self.assertEqual(report["schema_version"], "1.17")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
 

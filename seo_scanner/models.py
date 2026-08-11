@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.16"
+SCHEMA_VERSION = "1.17"
 
 
 @dataclass(frozen=True)
@@ -134,6 +134,10 @@ class RenderedPage:
     duration_ms: int = 0
     console_errors: list[str] = field(default_factory=list)
     failed_requests: list[dict[str, Any]] = field(default_factory=list)
+    network_requests: list[dict[str, Any]] = field(default_factory=list)
+    request_count: int = 0
+    transfer_bytes: int = 0
+    network_requests_truncated: bool = False
     error: str = ""
 
 
