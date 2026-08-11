@@ -16,6 +16,7 @@ from seo_scanner.analyzers.content import extract_page_content
 from seo_scanner.analyzers.directives import extract_page_signals
 from seo_scanner.analyzers.sitemap import parse_sitemap
 from seo_scanner.analyzers.hreflang import valid_language_tag
+from seo_scanner.analyzers.encoding import EncodingSignals, analyze_encoding
 from seo_scanner.analyzers.robots import parse_robots
 from seo_scanner.analyzers.url_quality import analyze_url
 from seo_scanner.baseline import apply_suppressions, compare_with_baseline
@@ -399,6 +400,33 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(result.pages[0].html_language, "en-AU")
         self.assertEqual(result.pages[0].content_languages, ["de-DE", "not_a_language"])
 
+    def test_document_encoding_integrity_and_effective_charset(self) -> None:
+        body = b" " * 1020 + b'<meta charset="windows-1252"><meta charset="invalid-charset">'
+        signals = analyze_encoding(body, "text/html; charset=utf-8")
+        self.assertEqual(signals.http_charset, "utf-8")
+        self.assertEqual(signals.meta_charsets, ["windows-1252", "invalid-charset"])
+        self.assertEqual(signals.invalid_charsets, ["invalid-charset"])
+        self.assertEqual(signals.effective_charset, "utf-8")
+        self.assertGreater(signals.meta_charset_offsets[0], 1024)
+
+        response = FetchResponse(
+            "https://example.com/", "https://example.com/", 200,
+            "text/html", body, len(body), 1, [], False,
+            {"content-type": "text/html; charset=utf-8"},
+        )
+        result = CrawlResult(start_url=response.requested_url, started_at="now")
+        state = _RunState(response.requested_url, result, float("inf"), deque(), set())
+
+        class StubFetcher:
+            def get(self, *_):
+                return response
+
+        Scanner()._fetch_page(StubFetcher(), state, response.requested_url)
+        encoding_rules = {issue.rule_id for issue in result.issues if issue.rule_id.startswith("encoding.")}
+        self.assertEqual(encoding_rules, {"encoding.invalid", "encoding.conflict", "encoding.meta_late"})
+        self.assertEqual(result.pages[0].http_charset, "utf-8")
+        self.assertEqual(result.pages[0].meta_charsets, ["windows-1252", "invalid-charset"])
+
     def test_missing_and_empty_html_language_are_distinct(self) -> None:
         missing = extract_page_signals("https://example.com/", "<html><body></body></html>")
         empty = extract_page_signals("https://example.com/", '<html lang=""><body></body></html>')
@@ -440,7 +468,7 @@ class UnitTests(unittest.TestCase):
 
         Scanner()._fetch_page(StubFetcher(), state, response.requested_url)
         self.assertEqual(
-            {"canonical.multiple", "canonical.invalid", "directive.conflicting_robots", "page.meta_refresh", "page.refresh_header", "language.html_missing"},
+            {"canonical.multiple", "canonical.invalid", "directive.conflicting_robots", "page.meta_refresh", "page.refresh_header", "language.html_missing", "encoding.missing"},
             {issue.rule_id for issue in result.issues},
         )
         self.assertEqual(set(state.page_queue), {"https://example.com/first", "https://example.com/second"})
@@ -521,10 +549,10 @@ class UnitTests(unittest.TestCase):
         )
         result = CrawlResult(start_url="https://example.com/", started_at="now")
         scanner = Scanner(ScannerConfig(max_page_size=100, max_page_duration_ms=100))
-        scanner._add_page_response_issues(result, response.requested_url, response, extract_page_signals(response.final_url, "", ""), set())
+        scanner._add_page_response_issues(result, response.requested_url, response, extract_page_signals(response.final_url, "", ""), EncodingSignals(), set())
         self.assertEqual(
             {issue.rule_id for issue in result.issues},
-            {"page.oversized", "page.slow_response", "page.redirect_chain", "language.html_missing"},
+            {"page.oversized", "page.slow_response", "page.redirect_chain", "language.html_missing", "encoding.missing"},
         )
 
 
@@ -587,7 +615,7 @@ class IntegrationTests(unittest.TestCase):
             ndjson = [json.loads(line) for line in ndjson_output.read_text(encoding="utf-8").splitlines()]
             sarif = json.loads(sarif_output.read_text(encoding="utf-8"))
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.19")
+        self.assertEqual(report["schema_version"], "1.20")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
         self.assertEqual(ndjson[0]["type"], "scan")

@@ -434,6 +434,10 @@ Document language checks validate the root `html lang` value and HTTP
 `Content-Language` tags, then compare them with each other and with valid
 self-referencing hreflang declarations.
 
+Document encoding checks retain HTTP and HTML charset declarations, use valid
+declarations for decoding, and report missing, invalid, conflicting or late meta
+charset values.
+
 Optional rendered diagnostics retain a bounded network waterfall for each sampled
 page, including response status, resource type and transferred bytes. Reports flag
 excessive request counts, excessive transfer weight and truncated inventories.

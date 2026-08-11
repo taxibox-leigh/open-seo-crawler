@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.19"
+SCHEMA_VERSION = "1.20"
 
 
 @dataclass(frozen=True)
@@ -79,6 +79,8 @@ class Page:
     query_parameter_count: int = 0
     html_language: str = ""
     content_languages: list[str] = field(default_factory=list)
+    http_charset: str = ""
+    meta_charsets: list[str] = field(default_factory=list)
 
 
 @dataclass
