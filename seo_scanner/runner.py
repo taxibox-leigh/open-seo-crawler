@@ -18,6 +18,7 @@ from .analyzers.sitemap import parse_sitemap, sitemap_locations_from_robots
 from .analyzers.robots import RobotsPolicy, parse_robots
 from .analyzers.url_quality import UrlQuality, analyze_url
 from .analyzers.hreflang import analyze_hreflang, valid_language_tag
+from .analyzers.encoding import EncodingSignals, analyze_encoding
 from .discovery import DiscoveredResource, discover_css, discover_html
 from .fetch import Fetcher, FetchResponse
 from .models import Coverage, CrawlResult, Edge, ExternalLinkTarget, Issue, Page, Resource, RobotsDocument, SitemapDocument
@@ -158,10 +159,12 @@ class Scanner:
         result.coverage.bytes_downloaded += len(response.body)
         html = ""
         signals = PageSignals()
+        encoding = EncodingSignals()
         content = PageContent()
         url_quality = analyze_url(url)
         if response.status < 400 and response.content_type in ("text/html", "application/xhtml+xml"):
-            html = response.body.decode(_encoding(response.content_type), errors="replace")
+            encoding = analyze_encoding(response.body, response.headers.get("content-type", ""))
+            html = response.body.decode(encoding.effective_charset, errors="replace")
             signals = extract_page_signals(response.final_url, html, response.headers.get("x-robots-tag", ""))
             content = extract_page_content(html, response.final_url)
         result.pages.append(Page(
@@ -184,9 +187,10 @@ class Scanner:
             query_parameter_count=url_quality.query_parameter_count,
             html_language=signals.html_language,
             content_languages=_content_languages(response.headers.get("content-language", "")),
+            http_charset=encoding.http_charset, meta_charsets=encoding.meta_charsets,
         ))
         result.coverage.pages_fetched += 1
-        self._add_page_response_issues(result, url, response, signals, state.edges)
+        self._add_page_response_issues(result, url, response, signals, encoding, state.edges)
         self._add_url_quality_issues(result, url, url_quality, state.edges)
         if html:
             self._queue_page_discoveries(state, response.final_url, html, signals, content)
@@ -198,7 +202,7 @@ class Scanner:
             self._mark_incomplete(result, "max_page_bytes")
         return False
 
-    def _add_page_response_issues(self, result: CrawlResult, url: str, response: FetchResponse, signals: PageSignals, edges: set[Edge]) -> None:
+    def _add_page_response_issues(self, result: CrawlResult, url: str, response: FetchResponse, signals: PageSignals, encoding: EncodingSignals, edges: set[Edge]) -> None:
         linked = any(edge.target_url == url and edge.context == "a.href" for edge in edges)
         if response.status >= 400 and linked:
             result.issues.append(self._issue("link.http_error", "page", url, f"Internal link target returns HTTP {response.status}", edges, {"status": response.status}))
@@ -217,6 +221,15 @@ class Scanner:
             result.issues.append(self._issue("directive.conflicting_robots", "page", url, "Contradictory robots directives were found", edges, {"conflicts": signals.robots_conflicts, "directives": signals.robots_directives}))
         content_languages = _content_languages(response.headers.get("content-language", ""))
         if response.status < 400 and response.content_type in ("text/html", "application/xhtml+xml"):
+            if not encoding.http_charset and not encoding.meta_charsets:
+                result.issues.append(self._issue("encoding.missing", "page", url, "HTML response has no HTTP or meta charset declaration", edges))
+            if encoding.invalid_charsets:
+                result.issues.append(self._issue("encoding.invalid", "page", url, "HTML response declares invalid character encodings", edges, {"charsets": encoding.invalid_charsets}))
+            if len(encoding.canonical_charsets) > 1:
+                result.issues.append(self._issue("encoding.conflict", "page", url, "HTTP and HTML character encoding declarations do not agree", edges, {"http_charset": encoding.http_charset, "meta_charsets": encoding.meta_charsets}))
+            late_offsets = [offset for offset in encoding.meta_charset_offsets if offset > 1024]
+            if late_offsets:
+                result.issues.append(self._issue("encoding.meta_late", "page", url, "Meta charset declaration is not entirely within the first 1024 bytes", edges, {"declaration_end_offsets": late_offsets}))
             if not signals.html_language_declared:
                 result.issues.append(self._issue("language.html_missing", "page", url, "Root html element has no lang attribute", edges))
             elif not signals.html_language or not valid_language_tag(signals.html_language):
@@ -713,10 +726,6 @@ class Scanner:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _encoding(_: str) -> str:
-    return "utf-8"
 
 
 def _content_languages(value: str) -> list[str]:
