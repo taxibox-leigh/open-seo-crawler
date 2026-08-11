@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.17"
+SCHEMA_VERSION = "1.18"
 
 
 @dataclass(frozen=True)
@@ -138,6 +138,10 @@ class RenderedPage:
     request_count: int = 0
     transfer_bytes: int = 0
     network_requests_truncated: bool = False
+    accessibility_violations: list[dict[str, Any]] = field(default_factory=list)
+    accessibility_violations_total: int = 0
+    accessibility_truncated: bool = False
+    accessibility_error: str = ""
     error: str = ""
 
 

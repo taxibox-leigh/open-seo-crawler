@@ -434,6 +434,12 @@ Optional rendered diagnostics retain a bounded network waterfall for each sample
 page, including response status, resource type and transferred bytes. Reports flag
 excessive request counts, excessive transfer weight and truncated inventories.
 
+Accessibility analysis can optionally run the maintained FOSS axe-core rules on
+the same rendered sample. Install axe-core (`npm install axe-core`), enable
+`accessibility_enabled`, and configure `axe_script_path` if it is not at
+`node_modules/axe-core/axe.min.js`. Violation types and affected DOM nodes are
+bounded independently and incomplete evidence is reported explicitly.
+
 ```bash
 python -m seo_scanner https://example.com \
   --max-pages 2000 \

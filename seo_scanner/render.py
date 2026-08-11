@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from datetime import datetime, timezone
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -90,11 +91,43 @@ def _render_page(browser: Any, url: str, config: ScannerConfig) -> RenderedPage:
     final_url = ""
     network_requests: list[dict[str, Any]] = []
     transfer_bytes = 0
+    accessibility_violations: list[dict[str, Any]] = []
+    accessibility_violations_total = 0
+    accessibility_truncated = False
+    accessibility_error = ""
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=config.render_navigation_timeout_ms)
         if config.render_settle_ms:
             page.wait_for_timeout(config.render_settle_ms)
         final_url = page.url
+        if config.accessibility_enabled:
+            try:
+                axe_path = Path(config.axe_script_path).resolve()
+                if not axe_path.is_file():
+                    raise FileNotFoundError(f"axe-core script not found: {axe_path}")
+                page.add_script_tag(path=str(axe_path))
+                axe_result = page.evaluate("""async (limits) => {
+                    const result = await axe.run(document, {resultTypes: ['violations']});
+                    return {
+                        total: result.violations.length,
+                        violations: result.violations.slice(0, limits.violations).map(item => ({
+                            id: item.id, impact: item.impact, description: item.description,
+                            help: item.help, help_url: item.helpUrl, tags: item.tags,
+                            nodes: item.nodes.slice(0, limits.nodes).map(node => ({
+                                target: node.target, html: node.html,
+                                failure_summary: node.failureSummary
+                            })),
+                            nodes_total: item.nodes.length
+                        }))
+                    };
+                }""", {"violations": config.max_accessibility_violations_per_page, "nodes": config.max_accessibility_nodes_per_violation})
+                accessibility_violations = axe_result.get("violations", [])
+                accessibility_violations_total = int(axe_result.get("total", len(accessibility_violations)))
+                accessibility_truncated = accessibility_violations_total > len(accessibility_violations) or any(
+                    item.get("nodes_total", 0) > len(item.get("nodes", [])) for item in accessibility_violations
+                )
+            except Exception as exc:
+                accessibility_error = str(exc)
     except Exception as exc:
         error = str(exc)
         final_url = getattr(page, "url", "")
@@ -124,5 +157,9 @@ def _render_page(browser: Any, url: str, config: ScannerConfig) -> RenderedPage:
         request_count=request_count,
         transfer_bytes=transfer_bytes,
         network_requests_truncated=network_requests_truncated,
+        accessibility_violations=accessibility_violations,
+        accessibility_violations_total=accessibility_violations_total,
+        accessibility_truncated=accessibility_truncated,
+        accessibility_error=accessibility_error,
         error=error,
     )
