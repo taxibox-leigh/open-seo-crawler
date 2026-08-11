@@ -95,11 +95,27 @@ def _render_page(browser: Any, url: str, config: ScannerConfig) -> RenderedPage:
     accessibility_violations_total = 0
     accessibility_truncated = False
     accessibility_error = ""
+    seo_signals: dict[str, Any] = {}
+    seo_signals_error = ""
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=config.render_navigation_timeout_ms)
         if config.render_settle_ms:
             page.wait_for_timeout(config.render_settle_ms)
         final_url = page.url
+        try:
+            seo_signals = page.evaluate("""() => ({
+                title: document.title.trim(),
+                meta_description: (document.querySelector('meta[name="description" i]')?.content || '').trim(),
+                canonical_url: document.querySelector('link[rel~="canonical"]')?.href || '',
+                robots_directives: Array.from(document.querySelectorAll('meta[name="robots" i], meta[name="googlebot" i], meta[name="bingbot" i]'))
+                    .flatMap(item => (item.content || '').split(',').map(value => value.trim().toLowerCase()).filter(Boolean)),
+                h1s: Array.from(document.querySelectorAll('h1')).map(item => (item.textContent || '').trim()).filter(Boolean),
+                html_language: (document.documentElement.lang || '').trim()
+            })""")
+            if not isinstance(seo_signals, dict):
+                raise TypeError("Rendered SEO signal evaluation returned an invalid result")
+        except Exception as exc:
+            seo_signals_error = str(exc)
         if config.accessibility_enabled:
             try:
                 axe_path = Path(config.axe_script_path).resolve()
@@ -161,5 +177,12 @@ def _render_page(browser: Any, url: str, config: ScannerConfig) -> RenderedPage:
         accessibility_violations_total=accessibility_violations_total,
         accessibility_truncated=accessibility_truncated,
         accessibility_error=accessibility_error,
+        title=str(seo_signals.get("title", "")),
+        meta_description=str(seo_signals.get("meta_description", "")),
+        canonical_url=str(seo_signals.get("canonical_url", "")),
+        robots_directives=sorted(set(seo_signals.get("robots_directives", []))),
+        h1s=[str(item) for item in seo_signals.get("h1s", [])],
+        html_language=str(seo_signals.get("html_language", "")),
+        seo_signals_error=seo_signals_error,
         error=error,
     )

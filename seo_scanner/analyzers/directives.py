@@ -28,6 +28,10 @@ class PageSignals:
     jsonld_integrity_errors: list[str] = field(default_factory=list)
     jsonld_integrity_warnings: list[str] = field(default_factory=list)
     hreflang: list[HreflangReference] = field(default_factory=list)
+    html_canonical_urls: list[str] = field(default_factory=list)
+    header_canonical_urls: list[str] = field(default_factory=list)
+    header_hreflang: list[HreflangReference] = field(default_factory=list)
+    html_robots_directives: list[str] = field(default_factory=list)
 
 
 _SIMPLE_DIRECTIVES = {"all", "none", "index", "noindex", "follow", "nofollow", "noarchive", "nosnippet", "noimageindex", "nocache", "notranslate", "nopagereadaloud"}
@@ -51,6 +55,7 @@ def extract_page_signals(page_url: str, html: str, x_robots_tag: str = "") -> Pa
             invalid_canonicals.append(raw_value or "<missing href>")
     canonical_url = canonical_urls[0] if canonical_urls else None
     raw_directives = [tag.get("content", "") for tag in soup.select('meta[name="robots" i], meta[name="googlebot" i], meta[name="bingbot" i]')]
+    html_directives = sorted(set(_parse_directives(raw_directives)))
     if x_robots_tag:
         raw_directives.append(x_robots_tag)
     directives = _parse_directives(raw_directives)
@@ -103,6 +108,8 @@ def extract_page_signals(page_url: str, html: str, x_robots_tag: str = "") -> Pa
         jsonld_blocks=jsonld_blocks, duplicate_jsonld_blocks=duplicates,
         jsonld_integrity_errors=integrity_errors,
         jsonld_integrity_warnings=integrity_warnings, hreflang=hreflang,
+        html_canonical_urls=canonical_urls,
+        html_robots_directives=html_directives,
     )
 
 

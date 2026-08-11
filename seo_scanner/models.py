@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.21"
+SCHEMA_VERSION = "1.22"
 
 
 @dataclass(frozen=True)
@@ -90,6 +90,10 @@ class Page:
     document_body_count: int = 0
     title_count: int = 0
     meta_description_count: int = 0
+    header_canonical_urls: list[str] = field(default_factory=list)
+    header_hreflang: list[HreflangReference] = field(default_factory=list)
+    html_canonical_urls: list[str] = field(default_factory=list)
+    html_robots_directives: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -155,6 +159,13 @@ class RenderedPage:
     accessibility_violations_total: int = 0
     accessibility_truncated: bool = False
     accessibility_error: str = ""
+    title: str = ""
+    meta_description: str = ""
+    canonical_url: str = ""
+    robots_directives: list[str] = field(default_factory=list)
+    h1s: list[str] = field(default_factory=list)
+    html_language: str = ""
+    seo_signals_error: str = ""
     error: str = ""
 
 

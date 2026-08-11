@@ -18,6 +18,7 @@ from seo_scanner.analyzers.sitemap import parse_sitemap
 from seo_scanner.analyzers.hreflang import valid_language_tag
 from seo_scanner.analyzers.encoding import EncodingSignals, analyze_encoding
 from seo_scanner.analyzers.document import DocumentSignals, analyze_document
+from seo_scanner.analyzers.link_header import parse_link_header
 from seo_scanner.analyzers.robots import parse_robots
 from seo_scanner.analyzers.url_quality import analyze_url
 from seo_scanner.baseline import apply_suppressions, compare_with_baseline
@@ -70,11 +71,17 @@ class FakePage:
     def add_script_tag(self, **_) -> None:
         pass
 
-    def evaluate(self, *_):
-        return {"total": 2, "violations": [
-            {"id": "button-name", "impact": "critical", "nodes": [{"target": ["button"]}], "nodes_total": 1},
-            {"id": "landmark-one-main", "impact": "moderate", "nodes": [{"target": ["body"]}], "nodes_total": 2},
-        ]}
+    def evaluate(self, script, *_):
+        if "axe.run" in script:
+            return {"total": 2, "violations": [
+                {"id": "button-name", "impact": "critical", "nodes": [{"target": ["button"]}], "nodes_total": 1},
+                {"id": "landmark-one-main", "impact": "moderate", "nodes": [{"target": ["body"]}], "nodes_total": 2},
+            ]}
+        return {
+            "title": "Rendered title", "meta_description": "Rendered description",
+            "canonical_url": "https://example.com/rendered", "robots_directives": ["index"],
+            "h1s": ["Rendered heading"], "html_language": "en-AU",
+        }
 
     def close(self) -> None:
         pass
@@ -290,6 +297,8 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(pages[0].request_count, 1)
         self.assertEqual(pages[0].transfer_bytes, 150)
         self.assertEqual(pages[0].network_requests[0]["resource_type"], "script")
+        self.assertEqual(pages[0].title, "Rendered title")
+        self.assertEqual(pages[0].canonical_url, "https://example.com/rendered")
 
     def test_fetcher_only_advertises_decodable_content_encodings(self) -> None:
         fetcher = Fetcher("scanner-test", 10)
@@ -380,6 +389,63 @@ class UnitTests(unittest.TestCase):
         self.assertTrue({"none", "madeup", "noarchive"} <= set(signals.robots_directives))
         self.assertEqual(signals.invalid_robots_directives, ["madeup"])
         self.assertEqual(signals.jsonld_errors, [])
+
+    def test_http_declarations_cover_non_html_and_rendered_parity(self) -> None:
+        header = parse_link_header(
+            "https://example.com/file.pdf",
+            '</canonical>; rel="canonical", </regional>; rel="alternate"; hreflang="en-AU"; title="English, Australia"',
+        )
+        self.assertEqual(header.canonical_urls, ["https://example.com/canonical"])
+        self.assertEqual([(item.language, item.url) for item in header.hreflang], [("en-AU", "https://example.com/regional")])
+
+        response = FetchResponse(
+            "https://example.com/file.pdf", "https://example.com/file.pdf", 200,
+            "application/pdf", b"pdf", 3, 1, [], False,
+            {"x-robots-tag": "noindex", "link": '</canonical>; rel="canonical", </regional>; rel="alternate"; hreflang="en-AU"'},
+        )
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        state = _RunState(result.start_url, result, float("inf"), deque(), set())
+
+        class StubFetcher:
+            def get(self, *_):
+                return response
+
+        Scanner()._fetch_page(StubFetcher(), state, response.requested_url)
+        self.assertEqual(result.pages[0].robots_directives, ["noindex"])
+        self.assertEqual(result.pages[0].header_canonical_urls, ["https://example.com/canonical"])
+        self.assertEqual(set(state.page_queue), {"https://example.com/canonical", "https://example.com/regional"})
+
+        html = b'<html><head><link rel="canonical" href="/html-canonical"></head><body></body></html>'
+        response = FetchResponse(
+            "https://example.com/page", "https://example.com/page", 200,
+            "text/html", html, len(html), 1, [], False,
+            {"link": '</header-canonical>; rel="canonical"'},
+        )
+        conflict = CrawlResult(start_url="https://example.com/", started_at="now")
+        conflict_state = _RunState(conflict.start_url, conflict, float("inf"), deque(), set())
+        Scanner()._fetch_page(StubFetcher(), conflict_state, response.requested_url)
+        self.assertEqual(
+            {issue.rule_id for issue in conflict.issues if issue.rule_id.startswith("canonical.")},
+            {"canonical.header_html_conflict", "canonical.multiple"},
+        )
+
+        raw = Page(
+            "https://example.com/", "https://example.com/", 200, "text/html", 1, 1,
+            title="Raw title", meta_description="Raw description", h1s=["Raw heading"],
+            html_language="en", html_canonical_urls=["https://example.com/raw"],
+            html_robots_directives=["noindex"],
+        )
+        rendered = RenderedPage(
+            raw.url, raw.url, title="Rendered title", meta_description="Rendered description",
+            canonical_url="https://example.com/rendered", robots_directives=["index"],
+            h1s=["Rendered heading"], html_language="fr",
+        )
+        comparison = CrawlResult(start_url=raw.url, started_at="now")
+        Scanner()._add_rendered_signal_issues(comparison, raw, rendered)
+        self.assertEqual(
+            {issue.rule_id for issue in comparison.issues},
+            {"render.title_changed", "render.meta_description_changed", "render.canonical_changed", "render.robots_changed", "render.h1_changed", "render.language_changed"},
+        )
 
     def test_document_language_integrity_findings(self) -> None:
         html = b'<html lang="en-AU"><head><link rel="alternate" hreflang="fr-FR" href="/page"></head></html>'
@@ -649,7 +715,7 @@ class IntegrationTests(unittest.TestCase):
             ndjson = [json.loads(line) for line in ndjson_output.read_text(encoding="utf-8").splitlines()]
             sarif = json.loads(sarif_output.read_text(encoding="utf-8"))
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.21")
+        self.assertEqual(report["schema_version"], "1.22")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
         self.assertEqual(ndjson[0]["type"], "scan")
