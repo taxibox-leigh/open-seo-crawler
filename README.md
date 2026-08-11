@@ -409,6 +409,11 @@ entity type and URL. `--baseline previous.json` reports new, persistent and
 resolved IDs; `--ignore-issues ignored.json` marks durable suppressions without
 deleting evidence. Suppressed errors do not affect the CLI failure exit code.
 
+For automation and CI, `--ndjson report.ndjson` writes independently parseable
+inventory and finding records, while `--sarif report.sarif` writes SARIF 2.1.0
+with stable issue fingerprints and suppression state. Both are optional alongside
+the canonical versioned JSON report.
+
 The scanner also validates every discovered same-origin link and canonical target.
 It reports broken or redirecting internal links with referring-page attribution,
 canonical errors/chains/loops, missing/multiple/invalid canonical declarations,
