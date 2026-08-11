@@ -113,7 +113,8 @@ class Scanner:
             bytes=len(response.body), duration_ms=response.duration_ms, title=_title(response.body, response.content_type),
             truncated=response.truncated, redirect_hops=response.redirect_hops, canonical_url=signals.canonical_url,
             robots_directives=signals.robots_directives, invalid_robots_directives=signals.invalid_robots_directives,
-            jsonld_errors=signals.jsonld_errors, hreflang=signals.hreflang,
+            jsonld_errors=signals.jsonld_errors, jsonld_blocks=signals.jsonld_blocks,
+            hreflang=signals.hreflang,
         ))
         result.coverage.pages_fetched += 1
         if response.truncated:
@@ -134,6 +135,8 @@ class Scanner:
             result.issues.append(self._issue("directive.invalid_robots", "page", url, "Unsupported robots directives were found", edges, {"directives": signals.invalid_robots_directives}))
         if signals.jsonld_errors:
             result.issues.append(self._issue("structured_data.invalid_jsonld", "page", url, "One or more JSON-LD blocks are invalid", edges, {"errors": signals.jsonld_errors}))
+        if signals.duplicate_jsonld_blocks:
+            result.issues.append(self._issue("structured_data.duplicate_jsonld", "page", url, "Identical JSON-LD script blocks appear more than once", edges, {"duplicates": signals.duplicate_jsonld_blocks}))
 
     def _queue_page_discoveries(self, state: _RunState, final_url: str, html: str, signals: PageSignals) -> None:
         links, resources, found_edges = discover_html(final_url, html)

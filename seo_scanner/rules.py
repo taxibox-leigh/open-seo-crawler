@@ -38,6 +38,7 @@ RULES = {
         Rule("directive.noindex_canonical_conflict", "Noindex page canonicalizes elsewhere", "warning", "Use either noindex or canonical consolidation consistently for the intended outcome."),
         Rule("directive.invalid_robots", "Robots directive contains unsupported tokens", "warning", "Correct or remove invalid robots meta or X-Robots-Tag tokens."),
         Rule("structured_data.invalid_jsonld", "JSON-LD block contains invalid JSON", "error", "Correct the JSON syntax in the structured-data block."),
+        Rule("structured_data.duplicate_jsonld", "Page repeats an identical JSON-LD block", "warning", "Remove duplicate structured-data script blocks while retaining one complete declaration."),
         Rule("sitemap.fetch_failed", "Sitemap could not be fetched", "error", "Restore the sitemap or remove its declaration from robots.txt or the sitemap index."),
         Rule("sitemap.http_error", "Sitemap returns an HTTP error", "error", "Serve the sitemap successfully or update/remove its declaration."),
         Rule("sitemap.invalid_xml", "Sitemap XML is malformed or unsupported", "error", "Serve a valid XML urlset or sitemapindex document."),

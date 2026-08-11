@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://open-seo-crawler.dev/schema/scanner-result-1.6.json",
+  "$id": "https://open-seo-crawler.dev/schema/scanner-result-1.7.json",
   "title": "Open SEO Scanner result",
   "type": "object",
   "required": ["schema_version", "start_url", "started_at", "finished_at", "status", "pages", "resources", "edges", "issues", "errors", "coverage", "sitemaps", "external_links", "comparison"],
   "properties": {
-    "schema_version": {"const": "1.6"},
+    "schema_version": {"const": "1.7"},
     "start_url": {"type": "string", "format": "uri"},
     "started_at": {"type": "string", "format": "date-time"},
     "finished_at": {"type": "string", "format": "date-time"},
@@ -24,13 +24,18 @@
   "$defs": {
     "page": {
       "type": "object",
-      "required": ["url", "final_url", "status", "content_type", "bytes", "duration_ms", "title", "truncated", "redirect_hops", "canonical_url", "robots_directives", "invalid_robots_directives", "jsonld_errors", "hreflang"],
+      "required": ["url", "final_url", "status", "content_type", "bytes", "duration_ms", "title", "truncated", "redirect_hops", "canonical_url", "robots_directives", "invalid_robots_directives", "jsonld_errors", "jsonld_blocks", "hreflang"],
       "properties": {
         "url": {"type": "string"}, "final_url": {"type": "string"}, "status": {"type": "integer"},
         "content_type": {"type": "string"}, "bytes": {"type": "integer"}, "duration_ms": {"type": "integer"}, "title": {"type": "string"}, "truncated": {"type": "boolean"},
         "redirect_hops": {"type": "array", "items": {"type": "string"}}, "canonical_url": {"type": "string"},
         "robots_directives": {"type": "array", "items": {"type": "string"}}, "invalid_robots_directives": {"type": "array", "items": {"type": "string"}},
         "jsonld_errors": {"type": "array", "items": {"type": "string"}},
+        "jsonld_blocks": {"type": "array", "items": {
+          "type": "object", "required": ["index", "types"],
+          "properties": {"index": {"type": "integer"}, "types": {"type": "array", "items": {"type": "string"}}},
+          "additionalProperties": false
+        }},
         "hreflang": {"type": "array", "items": {"$ref": "#/$defs/hreflang"}}
       }, "additionalProperties": false
     },

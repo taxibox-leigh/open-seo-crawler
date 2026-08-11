@@ -125,6 +125,16 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(signals.invalid_robots_directives, ["madeup"])
         self.assertEqual(signals.jsonld_errors, [])
 
+    def test_jsonld_block_types_and_structural_duplicates(self) -> None:
+        signals = extract_page_signals(
+            "https://example.com/",
+            '''<script type="application/ld+json">{"@graph":[{"@type":"Organization"},{"@type":["WebSite","Thing"]}]}</script>
+            <script type="application/ld+json"> { "@graph": [ { "@type": "Organization" }, { "@type": ["WebSite", "Thing"] } ] } </script>''',
+        )
+        self.assertEqual(signals.jsonld_errors, [])
+        self.assertEqual(signals.jsonld_blocks[0]["types"], ["Organization", "Thing", "WebSite"])
+        self.assertEqual(signals.duplicate_jsonld_blocks, [{"block_indices": [1, 2], "types": ["Organization", "Thing", "WebSite"]}])
+
     def test_sitemap_parser_rejects_unsupported_or_oversized_xml(self) -> None:
         unsupported = parse_sitemap("https://example.com/sitemap.xml", b"<rss></rss>")
         self.assertIn("Unsupported root element", unsupported.errors[0])
@@ -198,7 +208,7 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.6")
+        self.assertEqual(report["schema_version"], "1.7")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
 
