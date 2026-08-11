@@ -22,6 +22,7 @@ from .fetch import Fetcher, FetchResponse
 from .models import Coverage, CrawlResult, Edge, ExternalLinkTarget, Issue, Page, Resource, SitemapDocument
 from .rules import get_rule
 from .scope import normalize_url, same_origin
+from .render import render_pages
 
 ProgressCallback = Callable[[dict[str, object]], None]
 
@@ -67,6 +68,11 @@ class Scanner:
                 self._check_external_links(fetcher, state)
             self._crawl_resources(fetcher, state)
 
+        # Keep optional browser sampling outside the raw crawl's deadline and
+        # byte budgets so it cannot make otherwise complete coverage partial.
+        if self.config.render_enabled:
+            self._run_rendered_diagnostics(result)
+
         result.edges = sorted(state.edges, key=lambda edge: (edge.source_url, edge.target_url, edge.context))
         self._add_graph_issues(result, state.edges)
         self._add_duplicate_issues(result, state.edges)
@@ -78,6 +84,25 @@ class Scanner:
         result.finished_at = _now()
         result.status = "partial" if not result.coverage.complete else "complete"
         return result
+
+    def _run_rendered_diagnostics(self, result: CrawlResult) -> None:
+        urls = [
+            page.final_url or page.url for page in result.pages
+            if page.status < 400 and page.content_type in ("text/html", "application/xhtml+xml")
+        ]
+        rendered, setup_error = render_pages(urls, self.config)
+        result.rendered_pages = rendered
+        result.coverage.rendered_pages_attempted = len(rendered)
+        result.coverage.rendered_pages_succeeded = sum(not page.error for page in rendered)
+        if setup_error:
+            result.issues.append(self._issue("render.unavailable", "crawl", result.start_url, setup_error))
+        for page in rendered:
+            if page.error:
+                result.issues.append(self._issue("render.navigation_failed", "page", page.url, page.error, evidence={"final_url": page.final_url}))
+            if page.failed_requests:
+                result.issues.append(self._issue("render.failed_requests", "page", page.url, f"Browser rendering encountered {len(page.failed_requests)} failed requests", evidence={"requests": page.failed_requests}))
+            if page.console_errors:
+                result.issues.append(self._issue("render.console_errors", "page", page.url, f"Browser rendering emitted {len(page.console_errors)} console errors", evidence={"errors": page.console_errors}))
 
     def _crawl_pages(self, fetcher: Fetcher, state: _RunState) -> None:
         while state.page_queue:

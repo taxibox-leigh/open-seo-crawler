@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.7"
+SCHEMA_VERSION = "1.8"
 
 
 @dataclass(frozen=True)
@@ -92,6 +92,18 @@ class Coverage:
     sitemap_urls_discovered: int = 0
     external_links_discovered: int = 0
     external_links_checked: int = 0
+    rendered_pages_attempted: int = 0
+    rendered_pages_succeeded: int = 0
+
+
+@dataclass
+class RenderedPage:
+    url: str
+    final_url: str = ""
+    duration_ms: int = 0
+    console_errors: list[str] = field(default_factory=list)
+    failed_requests: list[dict[str, Any]] = field(default_factory=list)
+    error: str = ""
 
 
 @dataclass
@@ -137,6 +149,7 @@ class CrawlResult:
     coverage: Coverage = field(default_factory=Coverage)
     sitemaps: list[SitemapDocument] = field(default_factory=list)
     external_links: list[ExternalLinkTarget] = field(default_factory=list)
+    rendered_pages: list[RenderedPage] = field(default_factory=list)
     comparison: BaselineComparison | None = None
 
     def to_dict(self) -> dict[str, Any]:

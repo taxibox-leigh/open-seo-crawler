@@ -20,6 +20,61 @@ from seo_scanner.fetch import Fetcher
 from seo_scanner.runner import Scanner, _is_browser_subresource
 from seo_scanner.scope import normalize_url
 from seo_scanner.models import Edge, Issue
+from seo_scanner.render import render_pages
+
+
+class FakeMessage:
+    type = "error"
+    text = "Uncaught example"
+
+
+class FakeResponse:
+    url = "https://example.com/missing.js"
+    status = 404
+
+
+class FakePage:
+    def __init__(self) -> None:
+        self.url = "about:blank"
+        self.handlers = {}
+
+    def on(self, event, handler) -> None:
+        self.handlers[event] = handler
+
+    def goto(self, url, **_) -> None:
+        self.url = url + "rendered"
+        self.handlers["console"](FakeMessage())
+        self.handlers["response"](FakeResponse())
+
+    def wait_for_timeout(self, _) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+class FakeBrowser:
+    def new_page(self) -> FakePage:
+        return FakePage()
+
+    def close(self) -> None:
+        pass
+
+
+class FakePlaywright:
+    chromium = None
+
+    def __init__(self) -> None:
+        self.chromium = self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        pass
+
+    def launch(self, **_) -> FakeBrowser:
+        return FakeBrowser()
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
@@ -77,6 +132,19 @@ class FixtureServer:
 
 
 class UnitTests(unittest.TestCase):
+    def test_rendered_diagnostics_are_bounded_and_capture_browser_failures(self) -> None:
+        config = ScannerConfig(render_enabled=True, max_rendered_pages=1, render_settle_ms=0)
+        pages, setup_error = render_pages(
+            ["https://example.com/a", "https://example.com/b"],
+            config,
+            browser_factory=FakePlaywright,
+        )
+        self.assertEqual(setup_error, "")
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0].final_url, "https://example.com/arendered")
+        self.assertEqual(pages[0].console_errors, ["Uncaught example"])
+        self.assertEqual(pages[0].failed_requests[0]["status"], 404)
+
     def test_fetcher_only_advertises_decodable_content_encodings(self) -> None:
         fetcher = Fetcher("scanner-test", 10)
         try:
@@ -214,7 +282,7 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.7")
+        self.assertEqual(report["schema_version"], "1.8")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
 
