@@ -172,13 +172,13 @@ class Scanner:
         result = state.result
         remaining = self._remaining_bytes(result)
         fetch_limit = min(self.config.max_page_bytes, remaining)
-        try:
-            response = fetcher.get(url, fetch_limit)
-        except requests.RequestException as exc:
+        response, fetch_error, attempts, downloaded = self._fetch_with_retries(fetcher, url, self.config.max_page_bytes, remaining, state.deadline)
+        if fetch_error or response is None:
+            exc = fetch_error or requests.RequestException("No response returned")
             result.errors.append(f"{url}: {exc}")
-            result.issues.append(self._issue("page.fetch_failed", "page", url, str(exc)))
+            result.issues.append(self._issue(_request_error_rule("page", exc), "page", url, str(exc), evidence={"attempts": attempts}))
             return False
-        result.coverage.bytes_downloaded += len(response.body)
+        result.coverage.bytes_downloaded += downloaded
         html = ""
         signals = PageSignals()
         encoding = EncodingSignals()
@@ -230,6 +230,7 @@ class Scanner:
             html_canonical_urls=signals.html_canonical_urls,
             html_robots_directives=signals.html_robots_directives,
             links=content.links, heading_levels=content.heading_levels,
+            fetch_attempts=attempts,
         ))
         result.coverage.pages_fetched += 1
         self._add_page_response_issues(result, url, response, signals, encoding, document, state.edges)
@@ -240,7 +241,7 @@ class Scanner:
             self._queue_declared_targets(state, response.final_url, signals)
         if response.truncated:
             result.issues.append(self._issue("page.response_truncated", "page", url, f"Page download stopped after {len(response.body)} bytes", state.edges, {"bytes_read": len(response.body), "limit": fetch_limit}))
-            if fetch_limit == remaining and remaining <= self.config.max_page_bytes:
+            if downloaded >= remaining:
                 self._set_limit(result, "max_total_bytes")
                 return True
             self._mark_incomplete(result, "max_page_bytes")
@@ -248,6 +249,8 @@ class Scanner:
 
     def _add_page_response_issues(self, result: CrawlResult, url: str, response: FetchResponse, signals: PageSignals, encoding: EncodingSignals, document: DocumentSignals, edges: set[Edge]) -> None:
         linked = any(edge.target_url == url and edge.context == "a.href" for edge in edges)
+        if response.status >= 400 and not linked:
+            result.issues.append(self._issue("page.http_error", "page", url, f"Page returns HTTP {response.status}", edges, {"status": response.status}))
         if response.status >= 400 and linked:
             result.issues.append(self._issue("link.http_error", "page", url, f"Internal link target returns HTTP {response.status}", edges, {"status": response.status}))
         if response.redirect_hops and linked:
@@ -383,7 +386,7 @@ class Scanner:
             if self._limit(state.result, state.deadline, state.result.coverage.bytes_downloaded >= self.config.max_total_bytes, "max_total_bytes"):
                 return
             remaining = self._remaining_bytes(state.result)
-            discovered, total_bytes_truncated = self._fetch_resource(fetcher, state.result, state.start_url, url, kind, state.pending_resources, state.edges, remaining)
+            discovered, total_bytes_truncated = self._fetch_resource(fetcher, state.result, state.start_url, url, kind, state.pending_resources, state.edges, remaining, state.deadline)
             resource_queue.extend(item for item in discovered if item not in state.seen_resources and item not in resource_queue)
             state.seen_resources.add(url)
             self._emit(state.result, len(state.page_queue), len(state.pending_resources) - len(state.seen_resources), url)
@@ -547,18 +550,17 @@ class Scanner:
             if not policy.allows(url):
                 result.issues.append(self._issue("sitemap.url_blocked", "page", url, "Sitemap URL is disallowed by robots.txt", edges, {"user_agent": policy.document.user_agent}))
 
-    def _fetch_resource(self, fetcher: Fetcher, result: CrawlResult, start_url: str, url: str, kind: str, pending: dict[str, str], edges: set[Edge], remaining_total_bytes: int) -> tuple[list[str], bool]:
+    def _fetch_resource(self, fetcher: Fetcher, result: CrawlResult, start_url: str, url: str, kind: str, pending: dict[str, str], edges: set[Edge], remaining_total_bytes: int, deadline: float = float("inf")) -> tuple[list[str], bool]:
         discovered_urls: list[str] = []
-        fetch_limit = min(self.config.max_resource_bytes, remaining_total_bytes)
-        try:
-            response = fetcher.get(url, fetch_limit)
-        except requests.RequestException as exc:
-            result.resources.append(Resource(url=url, kind=kind))
+        response, fetch_error, attempts, downloaded = self._fetch_with_retries(fetcher, url, self.config.max_resource_bytes, remaining_total_bytes, deadline)
+        if fetch_error or response is None:
+            exc = fetch_error or requests.RequestException("No response returned")
+            result.resources.append(Resource(url=url, kind=kind, fetch_attempts=attempts))
             result.errors.append(f"{url}: {exc}")
-            result.issues.append(self._issue("resource.fetch_failed", "resource", url, str(exc), edges))
+            result.issues.append(self._issue(_request_error_rule("resource", exc), "resource", url, str(exc), edges, {"attempts": attempts}))
             return discovered_urls, False
         size = len(response.body)
-        result.coverage.bytes_downloaded += size
+        result.coverage.bytes_downloaded += downloaded
         result.coverage.resources_fetched += 1
         headers = response.headers
         metadata = inspect_image(response.body) if kind == "image" and response.status < 400 else None
@@ -570,6 +572,7 @@ class Scanner:
             etag=headers.get("etag", ""), last_modified=headers.get("last-modified", ""),
             image_width=metadata.width if metadata else None, image_height=metadata.height if metadata else None,
             image_format=metadata.format if metadata else "", content_hash=hashlib.sha256(response.body).hexdigest() if response.body else "",
+            fetch_attempts=attempts,
         )
         result.resources.append(resource)
         if response.status >= 400:
@@ -603,7 +606,7 @@ class Scanner:
                 pending.setdefault(item.url, item.kind)
                 edges.add(Edge(url, item.url, "css.url"))
                 discovered_urls.append(item.url)
-        total_bytes_truncated = response.truncated and fetch_limit == remaining_total_bytes and remaining_total_bytes <= self.config.max_resource_bytes
+        total_bytes_truncated = response.truncated and downloaded >= remaining_total_bytes
         return discovered_urls, total_bytes_truncated
 
     def _add_graph_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
@@ -848,6 +851,45 @@ class Scanner:
                 raw_value = page.h1s[0] if attribute == "primary_h1" else getattr(page, attribute)
                 result.issues.append(self._issue(rule_id, "page", page.url, f"Content is shared by {len(matches)} indexable pages", edges, {"value": raw_value, "urls": urls}))
 
+    def _fetch_with_retries(self, fetcher: Fetcher, url: str, max_response_bytes: int, byte_budget: int, deadline: float) -> tuple[FetchResponse | None, requests.RequestException | None, int, int]:
+        started = time.monotonic()
+        attempts = 0
+        downloaded = 0
+        last_response: FetchResponse | None = None
+        retryable_statuses = {408, 425, 429, 500, 502, 503, 504}
+        while attempts < self.config.max_fetch_attempts and downloaded < byte_budget and time.monotonic() < deadline:
+            attempts += 1
+            try:
+                response = fetcher.get(url, min(max_response_bytes, byte_budget - downloaded))
+            except requests.RequestException as exc:
+                retryable = isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)) and not isinstance(exc, (requests.exceptions.SSLError, requests.exceptions.TooManyRedirects))
+                if not retryable or attempts >= self.config.max_fetch_attempts:
+                    return None, exc, attempts, downloaded
+                if not self._retry_pause(self.config.retry_backoff_seconds * (2 ** (attempts - 1)), deadline):
+                    return None, exc, attempts, downloaded
+                continue
+            last_response = response
+            downloaded += len(response.body)
+            if response.status not in retryable_statuses or attempts >= self.config.max_fetch_attempts or downloaded >= byte_budget:
+                response.duration_ms = round((time.monotonic() - started) * 1000)
+                return response, None, attempts, downloaded
+            retry_after = response.headers.get("retry-after", "")
+            delay = min(float(retry_after), self.config.max_retry_after_seconds) if retry_after.replace(".", "", 1).isdigit() else self.config.retry_backoff_seconds * (2 ** (attempts - 1))
+            if not self._retry_pause(delay, deadline):
+                response.duration_ms = round((time.monotonic() - started) * 1000)
+                return response, None, attempts, downloaded
+        if last_response:
+            last_response.duration_ms = round((time.monotonic() - started) * 1000)
+        return last_response, None, attempts, downloaded
+
+    @staticmethod
+    def _retry_pause(delay: float, deadline: float) -> bool:
+        if time.monotonic() + delay >= deadline:
+            return False
+        if delay:
+            time.sleep(delay)
+        return True
+
     def _limit(self, result: CrawlResult, deadline: float, condition: bool, reason: str) -> bool:
         actual = "max_duration_seconds" if time.monotonic() >= deadline else reason if condition else None
         if not actual:
@@ -898,6 +940,16 @@ def _same_hostname(left: str, right: str) -> bool:
 
 def _looks_not_found(value: str) -> bool:
     return bool(re.search(r"\b(?:404|page (?:not found|does not exist|doesn't exist|cannot be found)|content not found|we (?:could not|couldn't) find)\b", value))
+
+
+def _request_error_rule(entity: str, error: requests.RequestException) -> str:
+    if isinstance(error, requests.exceptions.TooManyRedirects):
+        return f"{entity}.redirect_loop"
+    if isinstance(error, requests.exceptions.SSLError):
+        return f"{entity}.tls_error"
+    if isinstance(error, requests.exceptions.Timeout):
+        return f"{entity}.timeout"
+    return f"{entity}.fetch_failed"
 
 
 def _expected_mime(kind: str) -> tuple[str, ...]:
