@@ -506,13 +506,22 @@ class IntegrationTests(unittest.TestCase):
         with FixtureServer() as url, TemporaryDirectory() as directory:
             output = Path(directory) / "report.json"
             csv_output = Path(directory) / "resources.csv"
-            code = main([url, "--output", str(output), "--resource-csv", str(csv_output), "--quiet"])
+            ndjson_output = Path(directory) / "report.ndjson"
+            sarif_output = Path(directory) / "report.sarif"
+            code = main([url, "--output", str(output), "--resource-csv", str(csv_output), "--ndjson", str(ndjson_output), "--sarif", str(sarif_output), "--quiet"])
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
+            ndjson = [json.loads(line) for line in ndjson_output.read_text(encoding="utf-8").splitlines()]
+            sarif = json.loads(sarif_output.read_text(encoding="utf-8"))
         self.assertEqual(code, 1)
         self.assertEqual(report["schema_version"], "1.17")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
+        self.assertEqual(ndjson[0]["type"], "scan")
+        self.assertEqual(ndjson[-1]["type"], "summary")
+        self.assertIn("issue", {record["type"] for record in ndjson})
+        self.assertEqual(sarif["version"], "2.1.0")
+        self.assertEqual(sarif["runs"][0]["results"][0]["partialFingerprints"]["issueId"], report["issues"][0]["issue_id"])
 
     def test_cli_applies_baseline_and_ignore_file(self) -> None:
         with FixtureServer() as url, TemporaryDirectory() as directory:

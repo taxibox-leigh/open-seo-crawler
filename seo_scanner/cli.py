@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .config import ScannerConfig
 from .runner import Scanner
-from .reports import write_resource_csv
+from .reports import write_ndjson, write_resource_csv, write_sarif
 from .baseline import apply_suppressions, compare_with_baseline
 
 
@@ -21,6 +21,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-duration-seconds", type=float)
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--resource-csv", type=Path, help="Optional flat resource inventory CSV")
+    parser.add_argument("--ndjson", type=Path, help="Optional newline-delimited inventory and findings")
+    parser.add_argument("--sarif", type=Path, help="Optional SARIF 2.1.0 findings report")
     parser.add_argument("--baseline", type=Path, help="Previous scanner JSON report to compare")
     parser.add_argument("--ignore-issues", type=Path, help="JSON array or newline-delimited stable issue IDs to suppress")
     return parser
@@ -45,6 +47,10 @@ def main(argv: list[str] | None = None) -> int:
         args.output.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
         if args.resource_csv:
             write_resource_csv(result, args.resource_csv)
+        if args.ndjson:
+            write_ndjson(result, args.ndjson)
+        if args.sarif:
+            write_sarif(result, args.sarif)
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         print(f"open-seo-scanner: {exc}", file=sys.stderr)
         return 2
