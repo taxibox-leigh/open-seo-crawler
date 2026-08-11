@@ -17,9 +17,9 @@ from seo_scanner.baseline import apply_suppressions, compare_with_baseline
 from seo_scanner.config import ScannerConfig
 from seo_scanner.discovery import discover_css, discover_html
 from seo_scanner.fetch import Fetcher
-from seo_scanner.runner import Scanner
+from seo_scanner.runner import Scanner, _is_browser_subresource
 from seo_scanner.scope import normalize_url
-from seo_scanner.models import Issue
+from seo_scanner.models import Edge, Issue
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
@@ -99,6 +99,12 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(pages, ["https://example.com/p"])
         self.assertEqual({item.url for item in resources}, {"https://example.com/a.webp", "https://example.com/b.webp"})
         self.assertIn("srcset", {edge.context for edge in edges})
+
+    def test_mixed_content_only_applies_to_loaded_subresources(self) -> None:
+        self.assertFalse(_is_browser_subresource(Edge("https://example.com", "http://other.test", "a.href")))
+        self.assertFalse(_is_browser_subresource(Edge("https://example.com", "http://other.test", "link.canonical")))
+        self.assertTrue(_is_browser_subresource(Edge("https://example.com", "http://other.test/image.png", "img.src")))
+        self.assertTrue(_is_browser_subresource(Edge("https://example.com", "http://other.test/app.css", "link.stylesheet")))
 
     def test_css_discovery(self) -> None:
         found = discover_css("https://example.com/css/main.css", "@import 'theme.css';x{background:url(../a.png)}")
