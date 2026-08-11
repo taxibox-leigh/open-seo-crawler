@@ -19,8 +19,8 @@ from seo_scanner.discovery import discover_css, discover_html
 from seo_scanner.fetch import Fetcher
 from seo_scanner.runner import Scanner, _is_browser_subresource
 from seo_scanner.scope import normalize_url
-from seo_scanner.models import Edge, Issue
-from seo_scanner.render import render_pages
+from seo_scanner.models import CrawlResult, Edge, Issue, Page, SitemapDocument
+from seo_scanner.render import render_pages, select_render_urls
 
 
 class FakeMessage:
@@ -132,6 +132,38 @@ class FixtureServer:
 
 
 class UnitTests(unittest.TestCase):
+    def test_daily_render_sample_rotates_all_sorted_urls_without_state(self) -> None:
+        config = ScannerConfig(max_rendered_pages=2, render_sample_strategy="daily_rotation")
+        urls = [f"https://example.com/{item}" for item in ("e", "c", "a", "d", "b")]
+        first = select_render_urls(urls, config, day_of_year=1)
+        second = select_render_urls(urls, config, day_of_year=2)
+        third = select_render_urls(urls, config, day_of_year=3)
+        wrapped = select_render_urls(urls, config, day_of_year=4)
+        self.assertEqual(first, (["https://example.com/a", "https://example.com/b"], 5, 1, 3))
+        self.assertEqual(second[0], ["https://example.com/c", "https://example.com/d"])
+        self.assertEqual(third[0], ["https://example.com/e"])
+        self.assertEqual(wrapped, first)
+
+    def test_site_architecture_depth_and_sitemap_orphans(self) -> None:
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [
+            Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1),
+            Page("https://example.com/a", "https://example.com/a", 200, "text/html", 1, 1),
+            Page("https://example.com/b", "https://example.com/b", 200, "text/html", 1, 1),
+            Page("https://example.com/orphan", "https://example.com/orphan", 200, "text/html", 1, 1),
+        ]
+        result.sitemaps = [SitemapDocument("https://example.com/sitemap.xml", 200, "urlset", ["https://example.com/", "https://example.com/orphan"])]
+        edges = {
+            Edge("https://example.com/", "https://example.com/a", "a.href"),
+            Edge("https://example.com/a", "https://example.com/b", "a.href"),
+        }
+        Scanner(ScannerConfig(max_click_depth=1))._add_architecture_issues(result, edges)
+        self.assertEqual([page.crawl_depth for page in result.pages], [0, 1, 2, None])
+        self.assertEqual(
+            {issue.rule_id for issue in result.issues},
+            {"architecture.deep_page", "architecture.sitemap_orphan"},
+        )
+
     def test_rendered_diagnostics_are_bounded_and_capture_browser_failures(self) -> None:
         config = ScannerConfig(render_enabled=True, max_rendered_pages=1, render_settle_ms=0)
         pages, setup_error = render_pages(
@@ -282,7 +314,7 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.8")
+        self.assertEqual(report["schema_version"], "1.9")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
 

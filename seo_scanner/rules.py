@@ -66,6 +66,8 @@ RULES = {
         Rule("render.navigation_failed", "Page failed during browser rendering", "error", "Restore the page and its browser execution path, then rerun rendered diagnostics."),
         Rule("render.failed_requests", "Browser rendering encountered failed requests", "warning", "Restore or update failed requests that affect the rendered page."),
         Rule("render.console_errors", "Browser rendering emitted console errors", "warning", "Resolve actionable browser console errors and verify the page still renders correctly."),
+        Rule("architecture.deep_page", "Page exceeds the configured click depth", "warning", "Add useful internal links that bring important pages closer to the site entry point."),
+        Rule("architecture.sitemap_orphan", "Sitemap page has no incoming internal links", "warning", "Link to the page from relevant indexable content, or remove it from the sitemap if it should not be discovered."),
     )
 }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -9,6 +10,19 @@ from .models import RenderedPage
 
 
 BrowserFactory = Callable[[], Any]
+
+
+def select_render_urls(urls: Iterable[str], config: ScannerConfig, day_of_year: int | None = None) -> tuple[list[str], int, int, int]:
+    eligible = sorted(set(urls))
+    if not eligible:
+        return [], 0, 0, 0
+    slices = (len(eligible) + config.max_rendered_pages - 1) // config.max_rendered_pages
+    selected_slice = 0
+    if config.render_sample_strategy == "daily_rotation":
+        day = day_of_year or datetime.now(timezone.utc).timetuple().tm_yday
+        selected_slice = (day - 1) % slices
+    start = selected_slice * config.max_rendered_pages
+    return eligible[start:start + config.max_rendered_pages], len(eligible), selected_slice + 1, slices
 
 
 def render_pages(urls: Iterable[str], config: ScannerConfig, browser_factory: BrowserFactory | None = None) -> tuple[list[RenderedPage], str]:
@@ -27,7 +41,7 @@ def render_pages(urls: Iterable[str], config: ScannerConfig, browser_factory: Br
         with browser_factory() as playwright:
             browser = playwright.chromium.launch(headless=True)
             try:
-                for url in list(dict.fromkeys(urls))[: config.max_rendered_pages]:
+                for url in list(urls)[: config.max_rendered_pages]:
                     rendered.append(_render_page(browser, url, config))
             finally:
                 browser.close()

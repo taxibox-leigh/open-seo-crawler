@@ -456,6 +456,10 @@ then set `render_enabled` in the JSON configuration. `max_rendered_pages`,
 `render_navigation_timeout_ms`, `render_settle_ms`, and
 `max_render_events_per_page` bound browser work and retained evidence. Browser
 setup or page failures are reported without changing raw crawl completeness.
+Set `render_sample_strategy` to `daily_rotation` to sort eligible URLs into
+fixed-size slices and select `(UTC day-of-year - 1) modulo slice count`. This
+rotates coverage without persistent state; reports record the selected slice,
+slice count, and eligible-page count. The default `first` strategy is unchanged.
 For scheduled batch environments, `Dockerfile.scanner` provides the same command
 in a non-root, stateless image; see `docs/SCANNER_CONTAINER.md` for baseline and
 output mount examples.
