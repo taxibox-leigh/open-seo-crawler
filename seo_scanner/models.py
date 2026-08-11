@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.8"
+SCHEMA_VERSION = "1.9"
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,7 @@ class Page:
     bytes: int
     duration_ms: int
     title: str = ""
+    crawl_depth: int | None = None
     truncated: bool = False
     redirect_hops: list[str] = field(default_factory=list)
     canonical_url: str = ""
@@ -94,6 +95,9 @@ class Coverage:
     external_links_checked: int = 0
     rendered_pages_attempted: int = 0
     rendered_pages_succeeded: int = 0
+    rendered_pages_available: int = 0
+    rendered_sample_slice: int = 0
+    rendered_sample_slices: int = 0
 
 
 @dataclass

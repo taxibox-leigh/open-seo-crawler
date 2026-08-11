@@ -22,7 +22,7 @@ from .fetch import Fetcher, FetchResponse
 from .models import Coverage, CrawlResult, Edge, ExternalLinkTarget, Issue, Page, Resource, SitemapDocument
 from .rules import get_rule
 from .scope import normalize_url, same_origin
-from .render import render_pages
+from .render import render_pages, select_render_urls
 
 ProgressCallback = Callable[[dict[str, object]], None]
 
@@ -78,6 +78,7 @@ class Scanner:
         self._add_duplicate_issues(result, state.edges)
         self._add_canonical_issues(result, state.edges)
         self._add_sitemap_issues(result, state.edges)
+        self._add_architecture_issues(result, state.edges)
         result.issues.extend(analyze_hreflang(result))
         result.coverage.pages_queued = len(state.page_queue)
         result.coverage.resources_discovered = len(state.pending_resources)
@@ -90,10 +91,14 @@ class Scanner:
             page.final_url or page.url for page in result.pages
             if page.status < 400 and page.content_type in ("text/html", "application/xhtml+xml")
         ]
-        rendered, setup_error = render_pages(urls, self.config)
+        selected, available, selected_slice, slices = select_render_urls(urls, self.config)
+        rendered, setup_error = render_pages(selected, self.config)
         result.rendered_pages = rendered
         result.coverage.rendered_pages_attempted = len(rendered)
         result.coverage.rendered_pages_succeeded = sum(not page.error for page in rendered)
+        result.coverage.rendered_pages_available = available
+        result.coverage.rendered_sample_slice = selected_slice
+        result.coverage.rendered_sample_slices = slices
         if setup_error:
             result.issues.append(self._issue("render.unavailable", "crawl", result.start_url, setup_error))
         for page in rendered:
@@ -431,6 +436,52 @@ class Scanner:
                 result.issues.append(self._issue("sitemap.url_noindex", "page", url, "Sitemap URL is noindex", edges))
             if page.canonical_url and page.canonical_url != url:
                 result.issues.append(self._issue("sitemap.url_noncanonical", "page", url, f"Sitemap URL canonicalizes to {page.canonical_url}", edges, {"canonical_url": page.canonical_url}))
+
+    def _add_architecture_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
+        navigation = [edge for edge in edges if edge.context == "a.href" and same_origin(result.start_url, edge.target_url)]
+        adjacency: dict[str, set[str]] = {}
+        incoming: set[str] = set()
+        for edge in navigation:
+            adjacency.setdefault(edge.source_url, set()).add(edge.target_url)
+            incoming.add(edge.target_url)
+
+        aliases = {page.url: page.final_url for page in result.pages if page.final_url}
+        start_alias = aliases.get(result.start_url, result.start_url)
+        depths = {result.start_url: 0, start_alias: 0}
+        queue = deque(dict.fromkeys([result.start_url, start_alias]))
+        while queue:
+            source = queue.popleft()
+            for target in sorted(adjacency.get(source, set())):
+                for candidate in dict.fromkeys([target, aliases.get(target, target)]):
+                    if candidate in depths:
+                        continue
+                    depths[candidate] = depths[source] + 1
+                    queue.append(candidate)
+
+        for page in result.pages:
+            page.crawl_depth = min(
+                (depths[url] for url in {page.url, page.final_url} if url in depths),
+                default=None,
+            )
+            if page.crawl_depth is not None and page.crawl_depth > self.config.max_click_depth:
+                result.issues.append(self._issue(
+                    "architecture.deep_page", "page", page.url,
+                    f"Page is {page.crawl_depth} clicks from the start URL",
+                    edges, {"depth": page.crawl_depth, "threshold": self.config.max_click_depth},
+                ))
+
+        pages = {page.url: page for page in result.pages}
+        sitemap_urls = {url for document in result.sitemaps for url in document.urls}
+        for url in sorted(sitemap_urls - {result.start_url}):
+            page = pages.get(url)
+            if not page or page.status >= 400 or {"noindex", "none"} & set(page.robots_directives):
+                continue
+            if url not in incoming:
+                result.issues.append(self._issue(
+                    "architecture.sitemap_orphan", "page", url,
+                    "Successful sitemap page has no incoming internal HTML links", edges,
+                    {"sitemap_url": url},
+                ))
 
     def _limit(self, result: CrawlResult, deadline: float, condition: bool, reason: str) -> bool:
         actual = "max_duration_seconds" if time.monotonic() >= deadline else reason if condition else None
