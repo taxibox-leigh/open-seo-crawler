@@ -451,6 +451,12 @@ reported. `X-Robots-Tag` directives are applied to every fetched page type.
 Rendered samples also retain title, description, canonical, robots, H1 and language
 signals and report material differences from the raw response.
 
+Internal anchor evidence retains normalized text and nofollow state. Reports cover
+empty, nofollow and insecure internal links, pages with weak followed-link support,
+and pages with no outgoing internal navigation. Page semantics also include short
+metadata, duplicate primary headings, skipped heading levels and conservative
+soft-404 detection.
+
 Optional rendered diagnostics retain a bounded network waterfall for each sampled
 page, including response status, resource type and transferred bytes. Reports flag
 excessive request counts, excessive transfer weight and truncated inventories.
