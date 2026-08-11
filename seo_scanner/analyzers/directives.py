@@ -12,6 +12,8 @@ from ..models import HreflangReference
 
 @dataclass
 class PageSignals:
+    html_language: str = ""
+    html_language_declared: bool = False
     canonical_url: str = ""
     canonical_urls: list[str] = field(default_factory=list)
     invalid_canonical_values: list[str] = field(default_factory=list)
@@ -34,6 +36,9 @@ _VALUE_DIRECTIVES = {"max-snippet", "max-image-preview", "max-video-preview", "u
 
 def extract_page_signals(page_url: str, html: str, x_robots_tag: str = "") -> PageSignals:
     soup = BeautifulSoup(html, "lxml")
+    html_tag = soup.find("html")
+    html_language_declared = bool(html_tag and html_tag.has_attr("lang"))
+    html_language = str(html_tag.get("lang", "")).strip() if html_tag else ""
     canonical_tags = soup.select('link[rel~="canonical"]')
     canonical_urls: list[str] = []
     invalid_canonicals: list[str] = []
@@ -89,6 +94,7 @@ def extract_page_signals(page_url: str, html: str, x_robots_tag: str = "") -> Pa
         if target and language:
             hreflang.append(HreflangReference(language, target))
     return PageSignals(
+        html_language=html_language, html_language_declared=html_language_declared,
         canonical_url=canonical_url or "", canonical_urls=canonical_urls,
         invalid_canonical_values=invalid_canonicals,
         robots_directives=sorted(set(directives)), invalid_robots_directives=invalid,

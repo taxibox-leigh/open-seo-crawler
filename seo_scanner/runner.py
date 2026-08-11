@@ -17,7 +17,7 @@ from .analyzers.directives import PageSignals, extract_page_signals
 from .analyzers.sitemap import parse_sitemap, sitemap_locations_from_robots
 from .analyzers.robots import RobotsPolicy, parse_robots
 from .analyzers.url_quality import UrlQuality, analyze_url
-from .analyzers.hreflang import analyze_hreflang
+from .analyzers.hreflang import analyze_hreflang, valid_language_tag
 from .discovery import DiscoveredResource, discover_css, discover_html
 from .fetch import Fetcher, FetchResponse
 from .models import Coverage, CrawlResult, Edge, ExternalLinkTarget, Issue, Page, Resource, RobotsDocument, SitemapDocument
@@ -182,6 +182,8 @@ class Scanner:
             twitter_card=content.twitter_card, twitter_image=content.twitter_image,
             images=content.images, url_length=url_quality.length,
             query_parameter_count=url_quality.query_parameter_count,
+            html_language=signals.html_language,
+            content_languages=_content_languages(response.headers.get("content-language", "")),
         ))
         result.coverage.pages_fetched += 1
         self._add_page_response_issues(result, url, response, signals, state.edges)
@@ -213,6 +215,20 @@ class Scanner:
             result.issues.append(self._issue("directive.invalid_robots", "page", url, "Unsupported robots directives were found", edges, {"directives": signals.invalid_robots_directives}))
         if signals.robots_conflicts:
             result.issues.append(self._issue("directive.conflicting_robots", "page", url, "Contradictory robots directives were found", edges, {"conflicts": signals.robots_conflicts, "directives": signals.robots_directives}))
+        content_languages = _content_languages(response.headers.get("content-language", ""))
+        if response.status < 400 and response.content_type in ("text/html", "application/xhtml+xml"):
+            if not signals.html_language_declared:
+                result.issues.append(self._issue("language.html_missing", "page", url, "Root html element has no lang attribute", edges))
+            elif not signals.html_language or not valid_language_tag(signals.html_language):
+                result.issues.append(self._issue("language.html_invalid", "page", url, f"Invalid html lang value: {signals.html_language or '<empty>'}", edges, {"language": signals.html_language}))
+            invalid_content_languages = [item for item in content_languages if not valid_language_tag(item)]
+            if invalid_content_languages:
+                result.issues.append(self._issue("language.content_invalid", "page", url, "Content-Language contains invalid language tags", edges, {"languages": invalid_content_languages}))
+            if signals.html_language and content_languages and signals.html_language.lower() not in {item.lower() for item in content_languages}:
+                result.issues.append(self._issue("language.html_content_conflict", "page", url, "HTML and HTTP language declarations do not agree", edges, {"html_language": signals.html_language, "content_languages": content_languages}))
+            self_languages = sorted({item.language for item in signals.hreflang if item.url == response.final_url and item.language.lower() != "x-default"})
+            if signals.html_language and self_languages and signals.html_language.lower() not in {item.lower() for item in self_languages}:
+                result.issues.append(self._issue("language.html_hreflang_conflict", "page", url, "HTML language does not match a self-referencing hreflang value", edges, {"html_language": signals.html_language, "self_hreflang_languages": self_languages}))
         canonical_count = len(signals.canonical_urls) + len(signals.invalid_canonical_values)
         if canonical_count > 1:
             result.issues.append(self._issue("canonical.multiple", "page", url, f"Page contains {canonical_count} canonical declarations", edges, {"canonical_urls": signals.canonical_urls, "invalid_values": signals.invalid_canonical_values}))
@@ -701,6 +717,10 @@ def _now() -> str:
 
 def _encoding(_: str) -> str:
     return "utf-8"
+
+
+def _content_languages(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def _expected_mime(kind: str) -> tuple[str, ...]:

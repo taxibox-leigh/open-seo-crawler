@@ -379,6 +379,33 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(signals.invalid_robots_directives, ["madeup"])
         self.assertEqual(signals.jsonld_errors, [])
 
+    def test_document_language_integrity_findings(self) -> None:
+        html = b'<html lang="en-AU"><head><link rel="alternate" hreflang="fr-FR" href="/page"></head></html>'
+        response = FetchResponse(
+            "https://example.com/page", "https://example.com/page", 200,
+            "text/html", html, len(html), 1, [], False,
+            {"content-language": "de-DE, not_a_language"},
+        )
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        state = _RunState("https://example.com/", result, float("inf"), deque(), set())
+
+        class StubFetcher:
+            def get(self, *_):
+                return response
+
+        Scanner()._fetch_page(StubFetcher(), state, response.requested_url)
+        language_rules = {issue.rule_id for issue in result.issues if issue.rule_id.startswith("language.")}
+        self.assertEqual(language_rules, {"language.content_invalid", "language.html_content_conflict", "language.html_hreflang_conflict"})
+        self.assertEqual(result.pages[0].html_language, "en-AU")
+        self.assertEqual(result.pages[0].content_languages, ["de-DE", "not_a_language"])
+
+    def test_missing_and_empty_html_language_are_distinct(self) -> None:
+        missing = extract_page_signals("https://example.com/", "<html><body></body></html>")
+        empty = extract_page_signals("https://example.com/", '<html lang=""><body></body></html>')
+        self.assertFalse(missing.html_language_declared)
+        self.assertTrue(empty.html_language_declared)
+        self.assertEqual(empty.html_language, "")
+
     def test_indexability_declarations_retain_all_values_and_conflicts(self) -> None:
         signals = extract_page_signals(
             "https://example.com/page",
@@ -413,7 +440,7 @@ class UnitTests(unittest.TestCase):
 
         Scanner()._fetch_page(StubFetcher(), state, response.requested_url)
         self.assertEqual(
-            {"canonical.multiple", "canonical.invalid", "directive.conflicting_robots", "page.meta_refresh", "page.refresh_header"},
+            {"canonical.multiple", "canonical.invalid", "directive.conflicting_robots", "page.meta_refresh", "page.refresh_header", "language.html_missing"},
             {issue.rule_id for issue in result.issues},
         )
         self.assertEqual(set(state.page_queue), {"https://example.com/first", "https://example.com/second"})
@@ -497,7 +524,7 @@ class UnitTests(unittest.TestCase):
         scanner._add_page_response_issues(result, response.requested_url, response, extract_page_signals(response.final_url, "", ""), set())
         self.assertEqual(
             {issue.rule_id for issue in result.issues},
-            {"page.oversized", "page.slow_response", "page.redirect_chain"},
+            {"page.oversized", "page.slow_response", "page.redirect_chain", "language.html_missing"},
         )
 
 
@@ -560,7 +587,7 @@ class IntegrationTests(unittest.TestCase):
             ndjson = [json.loads(line) for line in ndjson_output.read_text(encoding="utf-8").splitlines()]
             sarif = json.loads(sarif_output.read_text(encoding="utf-8"))
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.18")
+        self.assertEqual(report["schema_version"], "1.19")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
         self.assertEqual(ndjson[0]["type"], "scan")

@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.18"
+SCHEMA_VERSION = "1.19"
 
 
 @dataclass(frozen=True)
@@ -77,6 +77,8 @@ class Page:
     images: list[ImageReference] = field(default_factory=list)
     url_length: int = 0
     query_parameter_count: int = 0
+    html_language: str = ""
+    content_languages: list[str] = field(default_factory=list)
 
 
 @dataclass
