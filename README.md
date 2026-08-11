@@ -445,6 +445,12 @@ metadata. Image delivery checks retain declared dimensions and responsive-source
 usage, then identify layout-risk images, large non-responsive sources and large
 legacy-format payloads.
 
+HTTP `Link` canonical and hreflang declarations are retained alongside their HTML
+equivalents, including for non-HTML URLs, and conflicting declarations are
+reported. `X-Robots-Tag` directives are applied to every fetched page type.
+Rendered samples also retain title, description, canonical, robots, H1 and language
+signals and report material differences from the raw response.
+
 Optional rendered diagnostics retain a bounded network waterfall for each sampled
 page, including response status, resource type and transferred bytes. Reports flag
 excessive request counts, excessive transfer weight and truncated inventories.

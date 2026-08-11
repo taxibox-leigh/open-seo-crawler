@@ -20,9 +20,10 @@ from .analyzers.url_quality import UrlQuality, analyze_url
 from .analyzers.hreflang import analyze_hreflang, valid_language_tag
 from .analyzers.encoding import EncodingSignals, analyze_encoding
 from .analyzers.document import DocumentSignals, analyze_document
+from .analyzers.link_header import parse_link_header
 from .discovery import DiscoveredResource, discover_css, discover_html
 from .fetch import Fetcher, FetchResponse
-from .models import Coverage, CrawlResult, Edge, ExternalLinkTarget, Issue, Page, Resource, RobotsDocument, SitemapDocument
+from .models import Coverage, CrawlResult, Edge, ExternalLinkTarget, Issue, Page, RenderedPage, Resource, RobotsDocument, SitemapDocument
 from .rules import get_rule
 from .scope import normalize_url, same_origin
 from .render import render_pages, select_render_urls
@@ -101,6 +102,7 @@ class Scanner:
         selected, available, selected_slice, slices = select_render_urls(urls, self.config)
         rendered, setup_error = render_pages(selected, self.config)
         result.rendered_pages = rendered
+        raw_pages = {alias: page for page in result.pages for alias in {page.url, page.final_url} if alias}
         result.coverage.rendered_pages_attempted = len(rendered)
         result.coverage.rendered_pages_succeeded = sum(not page.error for page in rendered)
         result.coverage.rendered_pages_available = available
@@ -111,6 +113,11 @@ class Scanner:
         for page in rendered:
             if page.error:
                 result.issues.append(self._issue("render.navigation_failed", "page", page.url, page.error, evidence={"final_url": page.final_url}))
+            raw = raw_pages.get(page.url) or raw_pages.get(page.final_url)
+            if page.seo_signals_error:
+                result.issues.append(self._issue("render.seo_signals_unavailable", "page", page.url, page.seo_signals_error))
+            elif raw and not page.error:
+                self._add_rendered_signal_issues(result, raw, page)
             if page.failed_requests:
                 result.issues.append(self._issue("render.failed_requests", "page", page.url, f"Browser rendering encountered {len(page.failed_requests)} failed requests", evidence={"requests": page.failed_requests}))
             if page.console_errors:
@@ -131,6 +138,20 @@ class Scanner:
                 result.issues.append(self._issue("accessibility.violations", "page", page.url, f"axe-core found {len(other)} accessibility violation types", evidence={"violations": other}))
             if page.accessibility_truncated:
                 result.issues.append(self._issue("accessibility.inventory_truncated", "page", page.url, "Accessibility evidence reached its configured limit", evidence={"captured_violation_types": len(page.accessibility_violations), "observed_violation_types": page.accessibility_violations_total}))
+
+    def _add_rendered_signal_issues(self, result: CrawlResult, raw: Page, rendered: RenderedPage) -> None:
+        rendered_canonical = normalize_url(rendered.final_url or raw.final_url or raw.url, rendered.canonical_url) if rendered.canonical_url else ""
+        comparisons = (
+            ("render.title_changed", _normalized_text(raw.title), _normalized_text(rendered.title), "Page title changes after JavaScript rendering"),
+            ("render.meta_description_changed", _normalized_text(raw.meta_description), _normalized_text(rendered.meta_description), "Meta description changes after JavaScript rendering"),
+            ("render.canonical_changed", raw.html_canonical_urls[0] if raw.html_canonical_urls else "", rendered_canonical or "", "Canonical declaration changes after JavaScript rendering"),
+            ("render.robots_changed", sorted(set(raw.html_robots_directives)), sorted(set(rendered.robots_directives)), "Robots meta directives change after JavaScript rendering"),
+            ("render.h1_changed", [_normalized_text(item) for item in raw.h1s], [_normalized_text(item) for item in rendered.h1s], "H1 headings change after JavaScript rendering"),
+            ("render.language_changed", raw.html_language.casefold(), rendered.html_language.casefold(), "HTML language changes after JavaScript rendering"),
+        )
+        for rule_id, raw_value, rendered_value, message in comparisons:
+            if raw_value != rendered_value:
+                result.issues.append(self._issue(rule_id, "page", raw.url, message, evidence={"raw": raw_value, "rendered": rendered_value, "rendered_url": rendered.final_url}))
 
     def _crawl_pages(self, fetcher: Fetcher, state: _RunState) -> None:
         while state.page_queue:
@@ -170,6 +191,15 @@ class Scanner:
             signals = extract_page_signals(response.final_url, html, response.headers.get("x-robots-tag", ""))
             content = extract_page_content(html, response.final_url)
             document = analyze_document(html)
+        else:
+            signals = extract_page_signals(response.final_url, "", response.headers.get("x-robots-tag", ""))
+        header_links = parse_link_header(response.final_url, response.headers.get("link", ""))
+        signals.header_canonical_urls = header_links.canonical_urls
+        signals.header_hreflang = header_links.hreflang
+        signals.canonical_urls.extend(header_links.canonical_urls)
+        signals.invalid_canonical_values.extend(header_links.invalid_canonical_values)
+        signals.hreflang.extend(header_links.hreflang)
+        signals.canonical_url = signals.canonical_urls[0] if signals.canonical_urls else ""
         result.pages.append(Page(
             url=url, final_url=response.final_url, status=response.status, content_type=response.content_type,
             bytes=len(response.body), duration_ms=response.duration_ms, title=content.title,
@@ -195,12 +225,18 @@ class Scanner:
             visible_text_fingerprint=content.visible_text_fingerprint,
             document_head_count=document.head_count, document_body_count=document.body_count,
             title_count=document.title_count, meta_description_count=document.meta_description_count,
+            header_canonical_urls=signals.header_canonical_urls,
+            header_hreflang=signals.header_hreflang,
+            html_canonical_urls=signals.html_canonical_urls,
+            html_robots_directives=signals.html_robots_directives,
         ))
         result.coverage.pages_fetched += 1
         self._add_page_response_issues(result, url, response, signals, encoding, document, state.edges)
         self._add_url_quality_issues(result, url, url_quality, state.edges)
         if html:
             self._queue_page_discoveries(state, response.final_url, html, signals, content)
+        else:
+            self._queue_declared_targets(state, response.final_url, signals)
         if response.truncated:
             result.issues.append(self._issue("page.response_truncated", "page", url, f"Page download stopped after {len(response.body)} bytes", state.edges, {"bytes_read": len(response.body), "limit": fetch_limit}))
             if fetch_limit == remaining and remaining <= self.config.max_page_bytes:
@@ -264,6 +300,8 @@ class Scanner:
             if signals.html_language and self_languages and signals.html_language.lower() not in {item.lower() for item in self_languages}:
                 result.issues.append(self._issue("language.html_hreflang_conflict", "page", url, "HTML language does not match a self-referencing hreflang value", edges, {"html_language": signals.html_language, "self_hreflang_languages": self_languages}))
         canonical_count = len(signals.canonical_urls) + len(signals.invalid_canonical_values)
+        if signals.html_canonical_urls and signals.header_canonical_urls and set(signals.html_canonical_urls) != set(signals.header_canonical_urls):
+            result.issues.append(self._issue("canonical.header_html_conflict", "page", url, "HTTP Link and HTML canonical declarations do not agree", edges, {"html_canonical_urls": signals.html_canonical_urls, "header_canonical_urls": signals.header_canonical_urls}))
         if canonical_count > 1:
             result.issues.append(self._issue("canonical.multiple", "page", url, f"Page contains {canonical_count} canonical declarations", edges, {"canonical_urls": signals.canonical_urls, "invalid_values": signals.invalid_canonical_values}))
         if signals.invalid_canonical_values:
@@ -302,14 +340,7 @@ class Scanner:
     def _queue_page_discoveries(self, state: _RunState, final_url: str, html: str, signals: PageSignals, content: PageContent) -> None:
         links, resources, found_edges = discover_html(final_url, html)
         state.edges.update(found_edges)
-        for canonical_url in dict.fromkeys(signals.canonical_urls):
-            state.edges.add(Edge(final_url, canonical_url, "link.canonical"))
-            if same_origin(state.start_url, canonical_url):
-                self._enqueue_page(state, canonical_url)
-        for reference in signals.hreflang:
-            state.edges.add(Edge(final_url, reference.url, f"link.hreflang:{reference.language}"))
-            if same_origin(state.start_url, reference.url):
-                self._enqueue_page(state, reference.url)
+        self._queue_declared_targets(state, final_url, signals)
         for link in links:
             if same_origin(state.start_url, link):
                 self._enqueue_page(state, link)
@@ -321,6 +352,16 @@ class Scanner:
                 continue
             state.pending_resources.setdefault(url, "image")
             state.edges.add(Edge(final_url, url, context))
+
+    def _queue_declared_targets(self, state: _RunState, final_url: str, signals: PageSignals) -> None:
+        for canonical_url in dict.fromkeys(signals.canonical_urls):
+            state.edges.add(Edge(final_url, canonical_url, "link.canonical"))
+            if same_origin(state.start_url, canonical_url):
+                self._enqueue_page(state, canonical_url)
+        for reference in signals.hreflang:
+            state.edges.add(Edge(final_url, reference.url, f"link.hreflang:{reference.language}"))
+            if same_origin(state.start_url, reference.url):
+                self._enqueue_page(state, reference.url)
 
     @staticmethod
     def _enqueue_page(state: _RunState, url: str) -> None:
@@ -802,6 +843,10 @@ def _now() -> str:
 
 def _content_languages(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _normalized_text(value: str) -> str:
+    return " ".join(value.split())
 
 
 def _expected_mime(kind: str) -> tuple[str, ...]:
