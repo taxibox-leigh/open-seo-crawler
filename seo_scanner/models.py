@@ -4,13 +4,19 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.12"
+SCHEMA_VERSION = "1.13"
 
 
 @dataclass(frozen=True)
 class HreflangReference:
     language: str
     url: str
+
+
+@dataclass(frozen=True)
+class ImageReference:
+    url: str
+    alt: str | None = None
 
 
 @dataclass
@@ -54,6 +60,13 @@ class Page:
     jsonld_blocks: list[dict[str, Any]] = field(default_factory=list)
     hreflang: list[HreflangReference] = field(default_factory=list)
     declared_bytes: int | None = None
+    viewport: bool = False
+    og_title: str = ""
+    og_description: str = ""
+    og_image: str = ""
+    twitter_card: str = ""
+    twitter_image: str = ""
+    images: list[ImageReference] = field(default_factory=list)
 
 
 @dataclass

@@ -86,6 +86,12 @@ RULES = {
         Rule("page.slow_response", "Page response exceeds the configured duration", "warning", "Reduce server response time and investigate slow application or origin work."),
         Rule("page.response_truncated", "Page exceeded the download byte limit", "error", "Reduce the HTML response or raise the safe per-page byte limit."),
         Rule("page.redirect_chain", "Page uses a multi-hop redirect chain", "warning", "Redirect directly to the final canonical destination in one hop."),
+        Rule("content.viewport_missing", "Page has no viewport declaration", "warning", "Add a responsive viewport meta tag for mobile rendering."),
+        Rule("content.image_alt_missing", "Page images are missing alt attributes", "warning", "Add descriptive alt text, or an explicit empty alt attribute for decorative images."),
+        Rule("social.og_title_missing", "Open Graph title is missing", "info", "Add an og:title value for shared-page previews."),
+        Rule("social.og_description_missing", "Open Graph description is missing", "info", "Add an og:description value for shared-page previews."),
+        Rule("social.og_image_missing", "Open Graph image is missing", "warning", "Add an absolute og:image URL for shared-page previews."),
+        Rule("social.twitter_card_missing", "Twitter card declaration is missing", "info", "Add a twitter:card declaration and appropriate card metadata."),
     )
 }
 

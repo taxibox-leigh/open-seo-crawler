@@ -145,7 +145,7 @@ class Scanner:
         if response.status < 400 and response.content_type in ("text/html", "application/xhtml+xml"):
             html = response.body.decode(_encoding(response.content_type), errors="replace")
             signals = extract_page_signals(response.final_url, html, response.headers.get("x-robots-tag", ""))
-            content = extract_page_content(html)
+            content = extract_page_content(html, response.final_url)
         result.pages.append(Page(
             url=url, final_url=response.final_url, status=response.status, content_type=response.content_type,
             bytes=len(response.body), duration_ms=response.duration_ms, title=content.title,
@@ -154,11 +154,15 @@ class Scanner:
             robots_directives=signals.robots_directives, invalid_robots_directives=signals.invalid_robots_directives,
             jsonld_errors=signals.jsonld_errors, jsonld_blocks=signals.jsonld_blocks,
             hreflang=signals.hreflang, declared_bytes=response.declared_bytes,
+            viewport=content.viewport, og_title=content.og_title,
+            og_description=content.og_description, og_image=content.og_image,
+            twitter_card=content.twitter_card, twitter_image=content.twitter_image,
+            images=content.images,
         ))
         result.coverage.pages_fetched += 1
         self._add_page_response_issues(result, url, response, signals, state.edges)
         if html:
-            self._queue_page_discoveries(state, response.final_url, html, signals)
+            self._queue_page_discoveries(state, response.final_url, html, signals, content)
         if response.truncated:
             result.issues.append(self._issue("page.response_truncated", "page", url, f"Page download stopped after {len(response.body)} bytes", state.edges, {"bytes_read": len(response.body), "limit": fetch_limit}))
             if fetch_limit == remaining and remaining <= self.config.max_page_bytes:
@@ -187,7 +191,7 @@ class Scanner:
         if signals.duplicate_jsonld_blocks:
             result.issues.append(self._issue("structured_data.duplicate_jsonld", "page", url, "Identical JSON-LD script blocks appear more than once", edges, {"duplicates": signals.duplicate_jsonld_blocks}))
 
-    def _queue_page_discoveries(self, state: _RunState, final_url: str, html: str, signals: PageSignals) -> None:
+    def _queue_page_discoveries(self, state: _RunState, final_url: str, html: str, signals: PageSignals, content: PageContent) -> None:
         links, resources, found_edges = discover_html(final_url, html)
         state.edges.update(found_edges)
         if signals.canonical_url:
@@ -204,6 +208,11 @@ class Scanner:
         for item in resources:
             if self.config.follow_external_resources or same_origin(state.start_url, item.url):
                 state.pending_resources.setdefault(item.url, item.kind)
+        for context, url in (("meta.og:image", content.og_image), ("meta.twitter:image", content.twitter_image)):
+            if not url or (not self.config.follow_external_resources and not same_origin(state.start_url, url)):
+                continue
+            state.pending_resources.setdefault(url, "image")
+            state.edges.add(Edge(final_url, url, context))
 
     @staticmethod
     def _enqueue_page(state: _RunState, url: str) -> None:
@@ -555,6 +564,19 @@ class Scanner:
                 result.issues.append(self._issue("content.multiple_h1", "page", page.url, f"Page contains {len(page.h1s)} H1 headings", edges, {"count": len(page.h1s), "headings": page.h1s}))
             if page.word_count < self.config.min_content_words:
                 result.issues.append(self._issue("content.thin", "page", page.url, f"Page contains approximately {page.word_count} visible words", edges, {"words": page.word_count, "threshold": self.config.min_content_words}))
+            if not page.viewport:
+                result.issues.append(self._issue("content.viewport_missing", "page", page.url, "Indexable page has no viewport meta tag", edges))
+            missing_alt = sorted({image.url for image in page.images if image.alt is None})
+            if missing_alt:
+                result.issues.append(self._issue("content.image_alt_missing", "page", page.url, f"Page contains {len(missing_alt)} images without alt attributes", edges, {"images": missing_alt}))
+            if not page.og_title:
+                result.issues.append(self._issue("social.og_title_missing", "page", page.url, "Indexable page has no og:title value", edges))
+            if not page.og_description:
+                result.issues.append(self._issue("social.og_description_missing", "page", page.url, "Indexable page has no og:description value", edges))
+            if not page.og_image:
+                result.issues.append(self._issue("social.og_image_missing", "page", page.url, "Indexable page has no og:image value", edges))
+            if not page.twitter_card:
+                result.issues.append(self._issue("social.twitter_card_missing", "page", page.url, "Indexable page has no twitter:card value", edges))
         self._add_duplicate_content_issues(result, pages, edges, "title", "content.duplicate_title")
         self._add_duplicate_content_issues(result, pages, edges, "meta_description", "content.duplicate_meta_description")
 

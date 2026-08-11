@@ -472,6 +472,11 @@ HTML downloads have an independent byte cap in addition to the whole-crawl
 budget. Reports distinguish per-page truncation from total-byte exhaustion and
 retain declared bytes. Configurable findings cover oversized HTML, slow page
 responses, and multi-hop page redirect chains.
+Page records include viewport, Open Graph, Twitter card, and image-alt signals.
+Missing social/mobile declarations and absent image alt attributes are reported
+for indexable pages; explicit empty alt text remains valid for decorative images.
+Same-origin Open Graph and Twitter images join the resource inventory, so their
+status, redirects, MIME type, size, caching, and decodability are verified too.
 For scheduled batch environments, `Dockerfile.scanner` provides the same command
 in a non-root, stateless image; see `docs/SCANNER_CONTAINER.md` for baseline and
 output mount examples.

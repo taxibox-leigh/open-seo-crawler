@@ -21,7 +21,7 @@ from seo_scanner.discovery import discover_css, discover_html
 from seo_scanner.fetch import Fetcher, FetchResponse
 from seo_scanner.runner import Scanner, _is_browser_subresource
 from seo_scanner.scope import normalize_url
-from seo_scanner.models import CrawlResult, Edge, Issue, Page, Resource, SitemapDocument
+from seo_scanner.models import CrawlResult, Edge, ImageReference, Issue, Page, Resource, SitemapDocument
 from seo_scanner.render import render_pages, select_render_urls
 
 
@@ -92,7 +92,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
             "/sitemap.xml": (200, "application/xml", f'''<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><sitemap><loc>{base}/sitemap-pages.xml</loc></sitemap><sitemap><loc>{base}/sitemap-duplicate.xml</loc></sitemap></sitemapindex>'''.encode(), {}),
             "/sitemap-pages.xml": (200, "application/xml", f'''<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>{base}/</loc></url><url><loc>{base}/page-2</loc><lastmod>not-a-date</lastmod></url><url><loc>{base}/missing-page</loc></url></urlset>'''.encode(), {}),
             "/sitemap-duplicate.xml": (200, "application/xml", f'''<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>{base}/</loc></url></urlset>'''.encode(), {}),
-            "/": (200, "text/html", f'''<title>Fixture</title><link rel="canonical" href="/"><link rel="alternate" hreflang="en-AU" href="/"><link rel="alternate" hreflang="en-AU" href="/page-2"><link rel="alternate" hreflang="en_AU" href="/missing-page"><a href="/page-2">next</a><a href="/missing-page">missing</a>
+            "/": (200, "text/html", f'''<title>Fixture</title><meta property="og:image" content="/social.png"><link rel="canonical" href="/"><link rel="alternate" hreflang="en-AU" href="/"><link rel="alternate" hreflang="en-AU" href="/page-2"><link rel="alternate" hreflang="en_AU" href="/missing-page"><a href="/page-2">next</a><a href="/missing-page">missing</a>
                 {external_anchor}<img src="/broken.png"><img srcset="/small.webp 1x, /large.webp 2x">
                 <script src="/wrong.js"></script><link rel="stylesheet" href="/style.css">'''.encode(), {}),
             "/page-2": (200, "text/html", b'<meta name="robots" content="noindex, nonsense"><link rel="canonical" href="/canonical-hop"><link rel="alternate" hreflang="en-AU" href="/"><script type="application/ld+json">{"broken":}</script><img src="/redirect.png">', {}),
@@ -104,6 +104,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
             "/wrong.js": (200, "text/html", b"<html>not js</html>", {}),
             "/style.css": (200, "text/css", b"body{background:url('/nested.png')} @font-face{src:url('/font.woff2')}", {}),
             "/nested.png": (200, "image/png", b"png", {}),
+            "/social.png": (200, "image/png", b"social", {}),
             "/font.woff2": (200, "font/woff2", b"font", {}),
             "/redirect.png": (302, "text/plain", b"", {"Location": "/small.webp"}),
         }
@@ -157,16 +158,22 @@ class UnitTests(unittest.TestCase):
 
     def test_page_content_extracts_metadata_headings_and_visible_words(self) -> None:
         content = extract_page_content('''<title> Example title </title><meta NAME="Description" content="A useful summary">
-            <h1>Main <span>heading</span></h1><p>Three visible words.</p><script>ignored script words</script>''')
+            <meta name="viewport" content="width=device-width"><meta property="og:title" content="Shared title">
+            <meta property="og:image" content="/share.webp"><meta name="twitter:card" content="summary_large_image">
+            <h1>Main <span>heading</span></h1><p>Three visible words.</p><img src="/decorative.svg" alt=""><img src="/missing.webp"><script>ignored script words</script>''', "https://example.com/page")
         self.assertEqual(content.title, "Example title")
         self.assertEqual(content.meta_description, "A useful summary")
         self.assertEqual(content.h1s, ["Main heading"])
         self.assertEqual(content.word_count, 7)
+        self.assertTrue(content.viewport)
+        self.assertEqual(content.og_image, "https://example.com/share.webp")
+        self.assertEqual(content.twitter_card, "summary_large_image")
+        self.assertEqual([(image.url, image.alt) for image in content.images], [("https://example.com/decorative.svg", ""), ("https://example.com/missing.webp", None)])
 
     def test_content_rules_cover_missing_long_duplicate_and_thin_pages(self) -> None:
         result = CrawlResult(start_url="https://example.com/", started_at="now")
         result.pages = [
-            Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1, title="Shared title", meta_description="Shared description", h1s=["One", "Two"], word_count=2),
+            Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1, title="Shared title", meta_description="Shared description", h1s=["One", "Two"], word_count=2, images=[ImageReference("https://example.com/missing.webp", None), ImageReference("https://example.com/decorative.svg", "")]),
             Page("https://example.com/b", "https://example.com/b", 200, "text/html", 1, 1, title="Shared title", meta_description="Shared description", word_count=0),
         ]
         scanner = Scanner(ScannerConfig(max_title_chars=5, max_meta_description_chars=5, min_content_words=3))
@@ -177,6 +184,7 @@ class UnitTests(unittest.TestCase):
         self.assertIn("content.multiple_h1", rules)
         self.assertIn("content.h1_missing", rules)
         self.assertEqual(rules.count("content.thin"), 2)
+        self.assertEqual(rules.count("content.image_alt_missing"), 1)
 
     def test_daily_render_sample_rotates_all_sorted_urls_without_state(self) -> None:
         config = ScannerConfig(max_rendered_pages=2, render_sample_strategy="daily_rotation")
@@ -353,6 +361,7 @@ class IntegrationTests(unittest.TestCase):
         broken = next(issue for issue in result.issues if issue.rule_id == "resource.http_error")
         self.assertEqual(broken.referring_urls, [url])
         self.assertTrue(any(resource.url.endswith("nested.png") for resource in result.resources))
+        self.assertTrue(any(resource.url.endswith("social.png") for resource in result.resources))
 
     def test_page_cap_emits_valid_partial_result(self) -> None:
         with FixtureServer() as url:
@@ -385,7 +394,7 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.12")
+        self.assertEqual(report["schema_version"], "1.13")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
 
