@@ -18,6 +18,8 @@ class PageSignals:
     jsonld_errors: list[str] = field(default_factory=list)
     jsonld_blocks: list[dict[str, object]] = field(default_factory=list)
     duplicate_jsonld_blocks: list[dict[str, object]] = field(default_factory=list)
+    jsonld_integrity_errors: list[str] = field(default_factory=list)
+    jsonld_integrity_warnings: list[str] = field(default_factory=list)
     hreflang: list[HreflangReference] = field(default_factory=list)
 
 
@@ -37,6 +39,7 @@ def extract_page_signals(page_url: str, html: str, x_robots_tag: str = "") -> Pa
     jsonld_errors: list[str] = []
     jsonld_blocks: list[dict[str, object]] = []
     blocks_by_value: dict[str, list[int]] = {}
+    parsed_blocks: list[tuple[int, object]] = []
     for index, tag in enumerate(soup.select('script[type="application/ld+json" i]'), start=1):
         value = tag.string or tag.get_text()
         if not value.strip():
@@ -49,18 +52,83 @@ def extract_page_signals(page_url: str, html: str, x_robots_tag: str = "") -> Pa
             continue
         canonical_value = json.dumps(parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         blocks_by_value.setdefault(canonical_value, []).append(index)
+        parsed_blocks.append((index, parsed))
         jsonld_blocks.append({"index": index, "types": _jsonld_types(parsed)})
     duplicates = [
         {"block_indices": indices, "types": _jsonld_types(json.loads(value))}
         for value, indices in blocks_by_value.items() if len(indices) > 1
     ]
+    integrity_errors, integrity_warnings = _jsonld_integrity(parsed_blocks)
     hreflang: list[HreflangReference] = []
     for tag in soup.select('link[rel~="alternate"][hreflang][href]'):
         target = normalize_url(page_url, tag.get("href", ""))
         language = tag.get("hreflang", "").strip()
         if target and language:
             hreflang.append(HreflangReference(language, target))
-    return PageSignals(canonical_url or "", sorted(set(directives)), invalid, jsonld_errors, jsonld_blocks, duplicates, hreflang)
+    return PageSignals(
+        canonical_url=canonical_url or "", robots_directives=sorted(set(directives)),
+        invalid_robots_directives=invalid, jsonld_errors=jsonld_errors,
+        jsonld_blocks=jsonld_blocks, duplicate_jsonld_blocks=duplicates,
+        jsonld_integrity_errors=integrity_errors,
+        jsonld_integrity_warnings=integrity_warnings, hreflang=hreflang,
+    )
+
+
+def _jsonld_integrity(blocks: list[tuple[int, object]]) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    definitions: set[str] = set()
+    fragment_references: set[str] = set()
+
+    def visit(value: object, block: int, path: str) -> None:
+        if isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, block, f"{path}[{index}]")
+            return
+        if not isinstance(value, dict):
+            return
+        kind = value.get("@type")
+        if "@type" in value and not (
+            isinstance(kind, str) and kind.strip()
+            or isinstance(kind, list) and kind and all(isinstance(item, str) and item.strip() for item in kind)
+        ):
+            errors.append(f"Block {block} {path}: @type must be a non-empty string or string array")
+        context = value.get("@context")
+        if "@context" in value and not isinstance(context, (str, dict, list)):
+            errors.append(f"Block {block} {path}: @context must be a string, object, or array")
+        graph = value.get("@graph")
+        if "@graph" in value and not isinstance(graph, (dict, list)):
+            errors.append(f"Block {block} {path}: @graph must be an object or array")
+        identifier = value.get("@id")
+        if "@id" in value and not (isinstance(identifier, str) and identifier.strip()):
+            errors.append(f"Block {block} {path}: @id must be a non-empty string")
+        elif isinstance(identifier, str) and identifier.startswith("#"):
+            if set(value) <= {"@id", "@context"}:
+                fragment_references.add(identifier)
+            else:
+                definitions.add(identifier)
+        for key, child in value.items():
+            if key != "@context":
+                visit(child, block, f"{path}.{key}")
+
+    for block, value in blocks:
+        if not isinstance(value, (dict, list)):
+            errors.append(f"Block {block}: root must be an object or array")
+            continue
+        if _jsonld_types(value) and not _has_context(value):
+            warnings.append(f"Block {block}: typed data has no @context")
+        visit(value, block, "$")
+    for identifier in sorted(fragment_references - definitions):
+        warnings.append(f"Local @id reference {identifier} has no definition on the page")
+    return sorted(set(errors)), sorted(set(warnings))
+
+
+def _has_context(value: object) -> bool:
+    if isinstance(value, dict):
+        return "@context" in value or any(_has_context(child) for child in value.values())
+    if isinstance(value, list):
+        return any(_has_context(child) for child in value)
+    return False
 
 
 def _jsonld_types(value: object) -> list[str]:
