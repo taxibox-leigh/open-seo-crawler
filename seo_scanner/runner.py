@@ -130,8 +130,10 @@ class Scanner:
 
     def _fetch_page(self, fetcher: Fetcher, state: _RunState, url: str) -> bool:
         result = state.result
+        remaining = self._remaining_bytes(result)
+        fetch_limit = min(self.config.max_page_bytes, remaining)
         try:
-            response = fetcher.get(url, self._remaining_bytes(result))
+            response = fetcher.get(url, fetch_limit)
         except requests.RequestException as exc:
             result.errors.append(f"{url}: {exc}")
             result.issues.append(self._issue("page.fetch_failed", "page", url, str(exc)))
@@ -151,15 +153,18 @@ class Scanner:
             truncated=response.truncated, redirect_hops=response.redirect_hops, canonical_url=signals.canonical_url,
             robots_directives=signals.robots_directives, invalid_robots_directives=signals.invalid_robots_directives,
             jsonld_errors=signals.jsonld_errors, jsonld_blocks=signals.jsonld_blocks,
-            hreflang=signals.hreflang,
+            hreflang=signals.hreflang, declared_bytes=response.declared_bytes,
         ))
         result.coverage.pages_fetched += 1
-        if response.truncated:
-            self._set_limit(result, "max_total_bytes")
-            return True
         self._add_page_response_issues(result, url, response, signals, state.edges)
         if html:
             self._queue_page_discoveries(state, response.final_url, html, signals)
+        if response.truncated:
+            result.issues.append(self._issue("page.response_truncated", "page", url, f"Page download stopped after {len(response.body)} bytes", state.edges, {"bytes_read": len(response.body), "limit": fetch_limit}))
+            if fetch_limit == remaining and remaining <= self.config.max_page_bytes:
+                self._set_limit(result, "max_total_bytes")
+                return True
+            self._mark_incomplete(result, "max_page_bytes")
         return False
 
     def _add_page_response_issues(self, result: CrawlResult, url: str, response: FetchResponse, signals: PageSignals, edges: set[Edge]) -> None:
@@ -168,6 +173,13 @@ class Scanner:
             result.issues.append(self._issue("link.http_error", "page", url, f"Internal link target returns HTTP {response.status}", edges, {"status": response.status}))
         if response.redirect_hops and linked:
             result.issues.append(self._issue("link.redirect", "page", url, f"Internal link redirects to {response.final_url}", edges, {"hops": response.redirect_hops}))
+        if len(response.redirect_hops) > 1:
+            result.issues.append(self._issue("page.redirect_chain", "page", url, f"Page reaches {response.final_url} through {len(response.redirect_hops)} redirects", edges, {"hops": response.redirect_hops, "final_url": response.final_url}))
+        observed_size = max(response.declared_bytes or 0, len(response.body))
+        if observed_size > self.config.max_page_size:
+            result.issues.append(self._issue("page.oversized", "page", url, f"HTML response is {observed_size} bytes", edges, {"bytes": observed_size, "threshold": self.config.max_page_size}))
+        if response.duration_ms > self.config.max_page_duration_ms:
+            result.issues.append(self._issue("page.slow_response", "page", url, f"Page response took {response.duration_ms} ms", edges, {"duration_ms": response.duration_ms, "threshold": self.config.max_page_duration_ms}))
         if signals.invalid_robots_directives:
             result.issues.append(self._issue("directive.invalid_robots", "page", url, "Unsupported robots directives were found", edges, {"directives": signals.invalid_robots_directives}))
         if signals.jsonld_errors:
@@ -572,6 +584,12 @@ class Scanner:
             result.coverage.limit_reason = reason
             result.issues.append(self._issue("crawl.limit_reached", "crawl", result.start_url, f"Crawl stopped at {reason}", evidence={"limit": reason}))
 
+    @staticmethod
+    def _mark_incomplete(result: CrawlResult, reason: str) -> None:
+        if result.coverage.complete:
+            result.coverage.complete = False
+            result.coverage.limit_reason = reason
+
     def _remaining_bytes(self, result: CrawlResult) -> int:
         return max(1, self.config.max_total_bytes - result.coverage.bytes_downloaded)
 
@@ -659,7 +677,7 @@ def _canonical_loops(canonicals: dict[str, str]) -> list[list[str]]:
 
 
 def _is_indexable_html(page: Page) -> bool:
-    if page.status >= 400 or page.redirect_hops or page.content_type not in ("text/html", "application/xhtml+xml"):
+    if page.status >= 400 or page.redirect_hops or page.truncated or page.content_type not in ("text/html", "application/xhtml+xml"):
         return False
     if {"noindex", "none"} & set(page.robots_directives):
         return False
