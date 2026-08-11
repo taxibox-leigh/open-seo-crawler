@@ -91,6 +91,8 @@ class UnitTests(unittest.TestCase):
     def test_url_normalization(self) -> None:
         self.assertEqual(normalize_url("https://EXAMPLE.com/a/", "../img.png#x"), "https://example.com/img.png")
         self.assertIsNone(normalize_url("https://example.com", "data:image/png,x"))
+        self.assertIsNone(normalize_url("https://example.com", "http://\u200b\u200bhttps//example.com/page"))
+        self.assertIsNone(normalize_url("https://example.com", "raw address with spaces"))
 
     def test_discovery_retains_context(self) -> None:
         pages, resources, edges = discover_html("https://example.com/", '<a href="/p"><img srcset="a.webp 1x, b.webp 2x">')
