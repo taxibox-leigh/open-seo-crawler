@@ -113,6 +113,12 @@ class Scanner:
                 result.issues.append(self._issue("render.failed_requests", "page", page.url, f"Browser rendering encountered {len(page.failed_requests)} failed requests", evidence={"requests": page.failed_requests}))
             if page.console_errors:
                 result.issues.append(self._issue("render.console_errors", "page", page.url, f"Browser rendering emitted {len(page.console_errors)} console errors", evidence={"errors": page.console_errors}))
+            if page.request_count > self.config.max_render_request_count:
+                result.issues.append(self._issue("render.excessive_requests", "page", page.url, f"Rendered page made {page.request_count} network requests", evidence={"request_count": page.request_count, "threshold": self.config.max_render_request_count}))
+            if page.transfer_bytes > self.config.max_render_transfer_bytes:
+                result.issues.append(self._issue("render.excessive_transfer", "page", page.url, f"Rendered page transferred {page.transfer_bytes} bytes", evidence={"transfer_bytes": page.transfer_bytes, "threshold": self.config.max_render_transfer_bytes}))
+            if page.network_requests_truncated:
+                result.issues.append(self._issue("render.network_inventory_truncated", "page", page.url, "Rendered network inventory reached its configured request limit", evidence={"captured": len(page.network_requests), "observed": page.request_count, "limit": self.config.max_render_network_requests_per_page}))
 
     def _crawl_pages(self, fetcher: Fetcher, state: _RunState) -> None:
         while state.page_queue:
