@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.14"
+SCHEMA_VERSION = "1.15"
 
 
 @dataclass(frozen=True)
@@ -69,6 +69,8 @@ class Page:
     twitter_card: str = ""
     twitter_image: str = ""
     images: list[ImageReference] = field(default_factory=list)
+    url_length: int = 0
+    query_parameter_count: int = 0
 
 
 @dataclass

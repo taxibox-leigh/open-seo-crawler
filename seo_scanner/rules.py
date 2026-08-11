@@ -95,6 +95,12 @@ RULES = {
         Rule("social.og_description_missing", "Open Graph description is missing", "info", "Add an og:description value for shared-page previews."),
         Rule("social.og_image_missing", "Open Graph image is missing", "warning", "Add an absolute og:image URL for shared-page previews."),
         Rule("social.twitter_card_missing", "Twitter card declaration is missing", "info", "Add a twitter:card declaration and appropriate card metadata."),
+        Rule("url.too_long", "Page URL exceeds the configured length", "warning", "Use a concise, descriptive URL path and remove unnecessary parameters."),
+        Rule("url.uppercase_path", "Page URL path contains uppercase characters", "info", "Use a consistent lowercase URL path and redirect alternate casing."),
+        Rule("url.underscore_path", "Page URL path contains underscores", "info", "Prefer hyphens as word separators in new or migrated URL paths."),
+        Rule("url.excessive_parameters", "Page URL has many query parameters", "warning", "Remove unnecessary parameters and canonicalize unavoidable variants."),
+        Rule("url.tracking_parameters", "Crawlable page URL contains tracking parameters", "info", "Keep tracking parameters out of internal links and canonicalize to the clean URL."),
+        Rule("url.repeated_segments", "Page URL repeats adjacent path segments", "warning", "Correct path-relative links or routing rules that repeat directory segments."),
     )
 }
 
