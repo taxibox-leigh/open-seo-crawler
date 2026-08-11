@@ -37,9 +37,11 @@ class ScannerConfig:
     max_title_chars: int = 60
     max_meta_description_chars: int = 160
     min_content_words: int = 200
+    robots_user_agent: str = "Googlebot"
+    max_robots_bytes: int = 512000
 
     def __post_init__(self) -> None:
-        positive = ("max_pages", "max_resources", "max_total_bytes", "max_resource_bytes", "max_resource_size", "max_image_width", "max_image_height", "min_compression_bytes", "min_cache_seconds", "max_sitemaps", "max_urls_per_sitemap", "max_sitemap_bytes", "max_external_links", "max_link_bytes", "timeout_seconds", "max_duration_seconds", "max_rendered_pages", "render_navigation_timeout_ms", "max_render_events_per_page", "max_click_depth", "max_title_chars", "max_meta_description_chars", "min_content_words")
+        positive = ("max_pages", "max_resources", "max_total_bytes", "max_resource_bytes", "max_resource_size", "max_image_width", "max_image_height", "min_compression_bytes", "min_cache_seconds", "max_sitemaps", "max_urls_per_sitemap", "max_sitemap_bytes", "max_external_links", "max_link_bytes", "timeout_seconds", "max_duration_seconds", "max_rendered_pages", "render_navigation_timeout_ms", "max_render_events_per_page", "max_click_depth", "max_title_chars", "max_meta_description_chars", "min_content_words", "max_robots_bytes")
         for name in positive:
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be greater than zero")
@@ -49,6 +51,8 @@ class ScannerConfig:
             raise ValueError("render_settle_ms must not be negative")
         if self.render_sample_strategy not in {"first", "daily_rotation"}:
             raise ValueError("render_sample_strategy must be first or daily_rotation")
+        if not self.robots_user_agent.strip():
+            raise ValueError("robots_user_agent must not be empty")
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "ScannerConfig":

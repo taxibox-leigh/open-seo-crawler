@@ -14,13 +14,14 @@ from seo_scanner.analyzers.content import extract_page_content
 from seo_scanner.analyzers.directives import extract_page_signals
 from seo_scanner.analyzers.sitemap import parse_sitemap
 from seo_scanner.analyzers.hreflang import valid_language_tag
+from seo_scanner.analyzers.robots import parse_robots
 from seo_scanner.baseline import apply_suppressions, compare_with_baseline
 from seo_scanner.config import ScannerConfig
 from seo_scanner.discovery import discover_css, discover_html
 from seo_scanner.fetch import Fetcher
 from seo_scanner.runner import Scanner, _is_browser_subresource
 from seo_scanner.scope import normalize_url
-from seo_scanner.models import CrawlResult, Edge, Issue, Page, SitemapDocument
+from seo_scanner.models import CrawlResult, Edge, Issue, Page, Resource, SitemapDocument
 from seo_scanner.render import render_pages, select_render_urls
 
 
@@ -133,6 +134,27 @@ class FixtureServer:
 
 
 class UnitTests(unittest.TestCase):
+    def test_robots_policy_reports_syntax_and_applies_named_agent_rules(self) -> None:
+        policy = parse_robots(
+            "https://example.com/robots.txt",
+            b"User-agent: *\nDisallow: /private/\nAllow: /private/public\nDisallow /broken\n",
+            "Googlebot",
+        )
+        self.assertFalse(policy.allows("https://example.com/private/page"))
+        self.assertTrue(policy.allows("https://example.com/private/public"))
+        self.assertIn("missing a colon", policy.document.errors[0])
+
+    def test_robots_findings_cover_blocked_pages_and_render_resources(self) -> None:
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [Page("https://example.com/private/page", "https://example.com/private/page", 200, "text/html", 1, 1)]
+        result.resources = [Resource("https://example.com/private/app.js", "https://example.com/private/app.js", "script", 200)]
+        policy = parse_robots("https://example.com/robots.txt", b"User-agent: *\nDisallow: /private/", "Googlebot")
+        result.robots = policy.document
+        Scanner()._add_robots_issues(result, set(), policy)
+        self.assertEqual({issue.rule_id for issue in result.issues}, {"robots.blocked_page", "robots.blocked_resource"})
+        self.assertEqual(result.robots.blocked_pages, ["https://example.com/private/page"])
+        self.assertEqual(result.robots.blocked_resources, ["https://example.com/private/app.js"])
+
     def test_page_content_extracts_metadata_headings_and_visible_words(self) -> None:
         content = extract_page_content('''<title> Example title </title><meta NAME="Description" content="A useful summary">
             <h1>Main <span>heading</span></h1><p>Three visible words.</p><script>ignored script words</script>''')
@@ -338,7 +360,7 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.10")
+        self.assertEqual(report["schema_version"], "1.11")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
 

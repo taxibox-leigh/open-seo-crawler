@@ -464,6 +464,10 @@ The versioned page records also include title, meta description, H1 headings,
 visible word count, and crawl depth. Indexable HTML pages are checked for
 missing or overlong metadata, missing or multiple H1s, thin content, and
 duplicate titles/descriptions. Length and word-count thresholds are configurable.
+When sitemap discovery is enabled, the scanner also retains robots.txt status,
+size, syntax errors, and the configured crawler policy. It reports fetched pages
+and browser resources disallowed for that crawler using longest-match Allow/
+Disallow precedence with `*` and terminal `$` pattern support.
 For scheduled batch environments, `Dockerfile.scanner` provides the same command
 in a non-root, stateless image; see `docs/SCANNER_CONTAINER.md` for baseline and
 output mount examples.

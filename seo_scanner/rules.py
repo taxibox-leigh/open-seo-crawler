@@ -77,6 +77,11 @@ RULES = {
         Rule("content.h1_missing", "Page has no H1 heading", "warning", "Add one clear primary heading that describes the page."),
         Rule("content.multiple_h1", "Page has multiple H1 headings", "warning", "Use one primary H1 and structure subordinate headings with lower levels."),
         Rule("content.thin", "Page has little visible text content", "warning", "Add useful original content that satisfies the page's search intent."),
+        Rule("robots.unavailable", "robots.txt is temporarily unavailable", "error", "Restore a successful robots.txt response so crawlers can reliably determine access policy."),
+        Rule("robots.byte_limit", "robots.txt exceeds the configured byte limit", "warning", "Reduce robots.txt below the supported size limit and keep directives concise."),
+        Rule("robots.invalid_syntax", "robots.txt contains malformed directives", "warning", "Correct malformed robots.txt lines so crawlers interpret the intended policy."),
+        Rule("robots.blocked_page", "Page is blocked by robots.txt", "error", "Allow crawling for the configured search crawler or remove the page from internal discovery and sitemaps."),
+        Rule("robots.blocked_resource", "Page resource is blocked by robots.txt", "warning", "Allow crawling of resources required to render and understand indexable pages."),
     )
 }
 

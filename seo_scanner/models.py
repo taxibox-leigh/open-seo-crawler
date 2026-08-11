@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.10"
+SCHEMA_VERSION = "1.11"
 
 
 @dataclass(frozen=True)
@@ -124,6 +124,18 @@ class SitemapDocument:
 
 
 @dataclass
+class RobotsDocument:
+    url: str
+    status: int | None = None
+    user_agent: str = ""
+    bytes: int = 0
+    truncated: bool = False
+    errors: list[str] = field(default_factory=list)
+    blocked_pages: list[str] = field(default_factory=list)
+    blocked_resources: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ExternalLinkTarget:
     url: str
     final_url: str = ""
@@ -155,6 +167,7 @@ class CrawlResult:
     errors: list[str] = field(default_factory=list)
     coverage: Coverage = field(default_factory=Coverage)
     sitemaps: list[SitemapDocument] = field(default_factory=list)
+    robots: RobotsDocument | None = None
     external_links: list[ExternalLinkTarget] = field(default_factory=list)
     rendered_pages: list[RenderedPage] = field(default_factory=list)
     comparison: BaselineComparison | None = None

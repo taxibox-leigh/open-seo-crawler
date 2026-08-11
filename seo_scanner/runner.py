@@ -15,10 +15,11 @@ from .analyzers.image import inspect_image
 from .analyzers.content import PageContent, extract_page_content
 from .analyzers.directives import PageSignals, extract_page_signals
 from .analyzers.sitemap import parse_sitemap, sitemap_locations_from_robots
+from .analyzers.robots import RobotsPolicy, parse_robots
 from .analyzers.hreflang import analyze_hreflang
 from .discovery import DiscoveredResource, discover_css, discover_html
 from .fetch import Fetcher, FetchResponse
-from .models import Coverage, CrawlResult, Edge, ExternalLinkTarget, Issue, Page, Resource, SitemapDocument
+from .models import Coverage, CrawlResult, Edge, ExternalLinkTarget, Issue, Page, Resource, RobotsDocument, SitemapDocument
 from .rules import get_rule
 from .scope import normalize_url, same_origin
 from .render import render_pages, select_render_urls
@@ -37,6 +38,7 @@ class _RunState:
     pending_resources: dict[str, str] = field(default_factory=dict)
     seen_resources: set[str] = field(default_factory=set)
     edges: set[Edge] = field(default_factory=set)
+    robots_policy: RobotsPolicy | None = None
 
 
 class Scanner:
@@ -59,7 +61,8 @@ class Scanner:
 
         with Fetcher(self.config.user_agent, self.config.timeout_seconds) as fetcher:
             if self.config.discover_sitemaps:
-                for sitemap_page in self._crawl_sitemaps(fetcher, result, start, state.deadline):
+                sitemap_pages, state.robots_policy = self._crawl_sitemaps(fetcher, result, start, state.deadline)
+                for sitemap_page in sitemap_pages:
                     if same_origin(start, sitemap_page):
                         self._enqueue_page(state, sitemap_page)
             self._crawl_pages(fetcher, state)
@@ -79,6 +82,7 @@ class Scanner:
         self._add_sitemap_issues(result, state.edges)
         self._add_architecture_issues(result, state.edges)
         self._add_content_issues(result, state.edges)
+        self._add_robots_issues(result, state.edges, state.robots_policy)
         result.issues.extend(analyze_hreflang(result))
         result.coverage.pages_queued = len(state.page_queue)
         result.coverage.resources_discovered = len(state.pending_resources)
@@ -247,22 +251,41 @@ class Scanner:
         if len(targets) > self.config.max_external_links:
             self._set_limit(state.result, "max_external_links")
 
-    def _crawl_sitemaps(self, fetcher: Fetcher, result: CrawlResult, start_url: str, deadline: float) -> list[str]:
+    def _crawl_sitemaps(self, fetcher: Fetcher, result: CrawlResult, start_url: str, deadline: float) -> tuple[list[str], RobotsPolicy | None]:
         robots_url = normalize_url(start_url, "/robots.txt")
         default_sitemap = normalize_url(start_url, "/sitemap.xml")
         candidates: list[str] = [default_sitemap] if default_sitemap else []
+        robots_policy = None
         if robots_url and time.monotonic() < deadline:
             try:
                 robots_remaining = self._remaining_bytes(result)
-                robots = fetcher.get(robots_url, min(self.config.max_resource_bytes, robots_remaining))
+                robots_limit = min(self.config.max_robots_bytes, robots_remaining)
+                robots = fetcher.get(robots_url, robots_limit)
                 result.coverage.bytes_downloaded += len(robots.body)
-                if robots.truncated and robots_remaining <= self.config.max_resource_bytes:
+                result.robots = RobotsDocument(
+                    url=robots.final_url, status=robots.status,
+                    user_agent=self.config.robots_user_agent, bytes=len(robots.body),
+                    truncated=robots.truncated,
+                )
+                if robots.status >= 500 or robots.status == 429:
+                    result.issues.append(self._issue("robots.unavailable", "robots", robots_url, f"robots.txt returns HTTP {robots.status}", evidence={"status": robots.status}))
+                if robots.truncated and robots_remaining <= self.config.max_robots_bytes:
                     self._set_limit(result, "max_total_bytes")
-                    return []
+                    return [], None
+                if robots.truncated and robots_limit == self.config.max_robots_bytes:
+                    result.issues.append(self._issue("robots.byte_limit", "robots", robots_url, "robots.txt exceeded the configured byte limit", evidence={"limit": self.config.max_robots_bytes}))
                 if robots.status < 400:
+                    robots_policy = parse_robots(robots.final_url, robots.body, self.config.robots_user_agent)
+                    robots_policy.document.status = robots.status
+                    robots_policy.document.bytes = len(robots.body)
+                    robots_policy.document.truncated = robots.truncated
+                    result.robots = robots_policy.document
+                    if robots_policy.document.errors:
+                        result.issues.append(self._issue("robots.invalid_syntax", "robots", robots_url, "robots.txt contains malformed directives", evidence={"errors": robots_policy.document.errors}))
                     candidates = list(dict.fromkeys(sitemap_locations_from_robots(robots.final_url, robots.body) + candidates))
-            except requests.RequestException:
-                pass
+            except requests.RequestException as exc:
+                result.robots = RobotsDocument(url=robots_url, user_agent=self.config.robots_user_agent, errors=[str(exc)])
+                result.issues.append(self._issue("robots.unavailable", "robots", robots_url, str(exc)))
         queue = deque(candidates)
         visited: set[str] = set()
         discovered_pages: list[str] = []
@@ -324,7 +347,24 @@ class Scanner:
                     discovered_pages.append(page_url)
             queue.extend(item for item in parsed.child_sitemaps if item not in visited)
         result.coverage.sitemap_urls_discovered = len(all_urls)
-        return discovered_pages
+        return discovered_pages, robots_policy
+
+    def _add_robots_issues(self, result: CrawlResult, edges: set[Edge], policy: RobotsPolicy | None) -> None:
+        if not policy or policy.document.truncated:
+            return
+        for page in result.pages:
+            target = page.final_url or page.url
+            if page.status >= 400 or policy.allows(target):
+                continue
+            policy.document.blocked_pages.append(page.url)
+            result.issues.append(self._issue("robots.blocked_page", "page", page.url, f"{policy.document.user_agent} is disallowed by robots.txt", edges, {"user_agent": policy.document.user_agent}))
+        browser_kinds = {"image", "stylesheet", "script", "font", "manifest", "video", "audio"}
+        for resource in result.resources:
+            target = resource.final_url or resource.url
+            if resource.kind not in browser_kinds or resource.status is None or resource.status >= 400 or policy.allows(target):
+                continue
+            policy.document.blocked_resources.append(resource.url)
+            result.issues.append(self._issue("robots.blocked_resource", "resource", resource.url, f"{policy.document.user_agent} is disallowed from fetching this page resource", edges, {"user_agent": policy.document.user_agent, "kind": resource.kind}))
 
     def _fetch_resource(self, fetcher: Fetcher, result: CrawlResult, start_url: str, url: str, kind: str, pending: dict[str, str], edges: set[Edge], remaining_total_bytes: int) -> tuple[list[str], bool]:
         discovered_urls: list[str] = []
