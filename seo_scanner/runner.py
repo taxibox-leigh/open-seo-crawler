@@ -353,7 +353,12 @@ class Scanner:
         return discovered_urls, total_bytes_truncated
 
     def _add_graph_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
-        for target in sorted({edge.target_url for edge in edges if edge.source_url.startswith("https://") and edge.target_url.startswith("http://")}):
+        for target in sorted({
+            edge.target_url for edge in edges
+            if _is_browser_subresource(edge)
+            and edge.source_url.startswith("https://")
+            and edge.target_url.startswith("http://")
+        }):
             result.issues.append(self._issue("resource.mixed_content", "resource", target, "HTTPS page or stylesheet references an HTTP resource", edges))
 
     def _add_duplicate_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
@@ -469,6 +474,18 @@ def _root_referrers(url: str, edges: set[Edge]) -> list[str]:
 
 def _is_compressible(content_type: str) -> bool:
     return content_type.startswith("text/") or content_type in {"application/javascript", "application/json", "application/manifest+json", "application/xml", "image/svg+xml"}
+
+
+def _is_browser_subresource(edge: Edge) -> bool:
+    """True when the relationship causes a browser resource request."""
+    direct = {"img.src", "srcset", "script.src", "css.url", "style.url", "object.data"}
+    link_resources = {
+        "link.stylesheet", "link.icon", "link.apple-touch-icon", "link.manifest",
+        "link.preload", "link.prefetch", "link.modulepreload",
+    }
+    return edge.context in direct or edge.context in link_resources or edge.context in {
+        "video.src", "audio.src", "source.src", "track.src", "iframe.src", "embed.src",
+    }
 
 
 def _cache_max_age(value: str) -> int | None:
