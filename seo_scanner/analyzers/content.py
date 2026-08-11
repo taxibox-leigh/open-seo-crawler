@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from bs4 import BeautifulSoup
 
-from ..models import ImageReference
+from ..models import ImageReference, LinkReference
 from ..scope import normalize_url
 
 
@@ -25,6 +25,8 @@ class PageContent:
     images: list[ImageReference] = field(default_factory=list)
     visible_text_hash: str = ""
     visible_text_fingerprint: str = ""
+    links: list[LinkReference] = field(default_factory=list)
+    heading_levels: list[int] = field(default_factory=list)
 
 
 def extract_page_content(html: str, base_url: str = "") -> PageContent:
@@ -52,6 +54,18 @@ def extract_page_content(html: str, base_url: str = "") -> PageContent:
                 _positive_int(image.get("width")), _positive_int(image.get("height")),
                 bool(image.get("srcset") or image.get("data-srcset") or (picture and picture.select_one("source[srcset], source[data-srcset]"))),
             ))
+    links: list[LinkReference] = []
+    for anchor in soup.select("a[href]"):
+        target = normalize_url(base_url, str(anchor.get("href", "")))
+        if not target:
+            continue
+        text = anchor.get_text(" ", strip=True)
+        if not text:
+            image = anchor.find("img")
+            text = str(image.get("alt", "")).strip() if image else ""
+        rel = {str(value).lower() for value in anchor.get("rel", [])}
+        links.append(LinkReference(target, " ".join(text.split()), "nofollow" in rel))
+    heading_levels = [int(item.name[1]) for item in soup.find_all(re.compile(r"^h[1-6]$", re.I))]
     for element in soup(["script", "style", "noscript", "template", "svg"]):
         element.decompose()
     text = soup.get_text(" ", strip=True)
@@ -62,7 +76,7 @@ def extract_page_content(html: str, base_url: str = "") -> PageContent:
         title, meta_description, h1s, len(words), viewport, og_title,
         og_description, og_image, twitter_card, twitter_image, images,
         hashlib.sha256(normalized_text.encode("utf-8")).hexdigest() if normalized_text else "",
-        _simhash(normalized_words),
+        _simhash(normalized_words), links, heading_levels,
     )
 
 

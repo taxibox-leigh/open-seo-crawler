@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.22"
+SCHEMA_VERSION = "1.23"
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,13 @@ class ImageReference:
     width: int | None = None
     height: int | None = None
     responsive: bool = False
+
+
+@dataclass(frozen=True)
+class LinkReference:
+    url: str
+    text: str = ""
+    nofollow: bool = False
 
 
 @dataclass
@@ -94,6 +101,8 @@ class Page:
     header_hreflang: list[HreflangReference] = field(default_factory=list)
     html_canonical_urls: list[str] = field(default_factory=list)
     html_robots_directives: list[str] = field(default_factory=list)
+    links: list[LinkReference] = field(default_factory=list)
+    heading_levels: list[int] = field(default_factory=list)
 
 
 @dataclass

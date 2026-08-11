@@ -27,7 +27,7 @@ from seo_scanner.discovery import discover_css, discover_html
 from seo_scanner.fetch import Fetcher, FetchResponse
 from seo_scanner.runner import Scanner, _RunState, _is_browser_subresource
 from seo_scanner.scope import normalize_url
-from seo_scanner.models import CrawlResult, Edge, ImageReference, Issue, Page, RenderedPage, Resource, SitemapDocument
+from seo_scanner.models import CrawlResult, Edge, ImageReference, Issue, LinkReference, Page, RenderedPage, Resource, SitemapDocument
 from seo_scanner.render import render_pages, select_render_urls
 
 
@@ -240,7 +240,7 @@ class UnitTests(unittest.TestCase):
             Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1, title="Shared title", meta_description="Shared description", h1s=["One", "Two"], word_count=2, images=[ImageReference("https://example.com/missing.webp", None), ImageReference("https://example.com/decorative.svg", "")]),
             Page("https://example.com/b", "https://example.com/b", 200, "text/html", 1, 1, title="Shared title", meta_description="Shared description", word_count=0),
         ]
-        scanner = Scanner(ScannerConfig(max_title_chars=5, max_meta_description_chars=5, min_content_words=3))
+        scanner = Scanner(ScannerConfig(min_title_chars=1, max_title_chars=5, min_meta_description_chars=1, max_meta_description_chars=5, min_content_words=3))
         scanner._add_content_issues(result, set())
         rules = [issue.rule_id for issue in result.issues]
         self.assertEqual(rules.count("content.duplicate_title"), 2)
@@ -249,6 +249,45 @@ class UnitTests(unittest.TestCase):
         self.assertIn("content.h1_missing", rules)
         self.assertEqual(rules.count("content.thin"), 2)
         self.assertEqual(rules.count("content.image_alt_missing"), 1)
+
+    def test_internal_link_and_page_semantics(self) -> None:
+        content = extract_page_content(
+            '<h1>Primary</h1><h3>Skipped</h3><a href="http://example.com/target" rel="nofollow"><img alt=""></a>',
+            "https://example.com/page",
+        )
+        self.assertEqual(content.heading_levels, [1, 3])
+        self.assertEqual(content.links, [LinkReference("http://example.com/target", "", True)])
+
+        pages = [
+            Page(
+                "https://example.com/missing", "https://example.com/missing", 200, "text/html", 1, 1,
+                title="404", meta_description="Short", h1s=["Page not found"], word_count=5,
+                heading_levels=[1, 3], links=content.links,
+            ),
+            Page("https://example.com/other", "https://example.com/other", 200, "text/html", 1, 1, title="Another useful page title", meta_description="A sufficiently descriptive summary for another useful page on the site.", h1s=["Page not found"], word_count=200),
+        ]
+        result = CrawlResult(start_url="https://example.com/", started_at="now", pages=pages)
+        Scanner()._add_content_issues(result, set())
+        rules = [issue.rule_id for issue in result.issues]
+        for rule_id in (
+            "content.title_too_short", "content.meta_description_too_short",
+            "content.heading_order_skipped", "content.duplicate_h1", "link.text_missing",
+            "link.internal_nofollow", "link.insecure_internal", "page.soft_404",
+        ):
+            self.assertIn(rule_id, rules)
+
+        architecture = CrawlResult(start_url="https://example.com/", started_at="now", pages=[
+            Page(
+                f"https://example.com/{index}", f"https://example.com/{index}", 200, "text/html", 1, 1,
+                links=[LinkReference("https://example.com/1", "One")] if index == 0 else [],
+            )
+            for index in range(5)
+        ])
+        architecture.start_url = "https://example.com/0"
+        edges = {Edge("https://example.com/0", "https://example.com/1", "a.href")}
+        Scanner()._add_architecture_issues(architecture, edges)
+        self.assertIn("architecture.low_inlinks", {issue.rule_id for issue in architecture.issues})
+        self.assertIn("architecture.no_outlinks", {issue.rule_id for issue in architecture.issues})
 
     def test_daily_render_sample_rotates_all_sorted_urls_without_state(self) -> None:
         config = ScannerConfig(max_rendered_pages=2, render_sample_strategy="daily_rotation")
@@ -715,7 +754,7 @@ class IntegrationTests(unittest.TestCase):
             ndjson = [json.loads(line) for line in ndjson_output.read_text(encoding="utf-8").splitlines()]
             sarif = json.loads(sarif_output.read_text(encoding="utf-8"))
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.22")
+        self.assertEqual(report["schema_version"], "1.23")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
         self.assertEqual(ndjson[0]["type"], "scan")

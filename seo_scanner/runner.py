@@ -229,6 +229,7 @@ class Scanner:
             header_hreflang=signals.header_hreflang,
             html_canonical_urls=signals.html_canonical_urls,
             html_robots_directives=signals.html_robots_directives,
+            links=content.links, heading_levels=content.heading_levels,
         ))
         result.coverage.pages_fetched += 1
         self._add_page_response_issues(result, url, response, signals, encoding, document, state.edges)
@@ -706,6 +707,26 @@ class Scanner:
                     {"sitemap_url": url},
                 ))
 
+        indexable = [page for page in result.pages if _is_indexable_html(page)]
+        if len(indexable) >= self.config.min_site_pages_for_link_metrics:
+            incoming_sources: dict[str, set[str]] = {}
+            outgoing_targets: dict[str, set[str]] = {}
+            for source_page in indexable:
+                source_url = source_page.final_url or source_page.url
+                for link in source_page.links:
+                    if link.nofollow or not same_origin(result.start_url, link.url):
+                        continue
+                    incoming_sources.setdefault(link.url, set()).add(source_url)
+                    outgoing_targets.setdefault(source_url, set()).add(link.url)
+            for page in indexable:
+                aliases_for_page = {page.url, page.final_url}
+                incoming_count = len(set().union(*(incoming_sources.get(alias, set()) for alias in aliases_for_page)))
+                outgoing_count = len(set().union(*(outgoing_targets.get(alias, set()) for alias in aliases_for_page)))
+                if page.url != result.start_url and incoming_count < self.config.min_internal_inlinks:
+                    result.issues.append(self._issue("architecture.low_inlinks", "page", page.url, f"Page has {incoming_count} incoming internal links", edges, {"count": incoming_count, "threshold": self.config.min_internal_inlinks}))
+                if outgoing_count == 0:
+                    result.issues.append(self._issue("architecture.no_outlinks", "page", page.url, "Page has no outgoing internal HTML links", edges))
+
     def _add_content_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
         pages = [page for page in result.pages if _is_indexable_html(page)]
         for page in pages:
@@ -713,16 +734,23 @@ class Scanner:
                 result.issues.append(self._issue("canonical.missing", "page", page.url, "Indexable page has no canonical declaration", edges))
             if not page.title:
                 result.issues.append(self._issue("content.title_missing", "page", page.url, "Indexable page has no title element", edges))
+            elif len(page.title) < self.config.min_title_chars:
+                result.issues.append(self._issue("content.title_too_short", "page", page.url, f"Title contains {len(page.title)} characters", edges, {"characters": len(page.title), "threshold": self.config.min_title_chars}))
             elif len(page.title) > self.config.max_title_chars:
                 result.issues.append(self._issue("content.title_too_long", "page", page.url, f"Title contains {len(page.title)} characters", edges, {"characters": len(page.title), "threshold": self.config.max_title_chars}))
             if not page.meta_description:
                 result.issues.append(self._issue("content.meta_description_missing", "page", page.url, "Indexable page has no meta description", edges))
+            elif len(page.meta_description) < self.config.min_meta_description_chars:
+                result.issues.append(self._issue("content.meta_description_too_short", "page", page.url, f"Meta description contains {len(page.meta_description)} characters", edges, {"characters": len(page.meta_description), "threshold": self.config.min_meta_description_chars}))
             elif len(page.meta_description) > self.config.max_meta_description_chars:
                 result.issues.append(self._issue("content.meta_description_too_long", "page", page.url, f"Meta description contains {len(page.meta_description)} characters", edges, {"characters": len(page.meta_description), "threshold": self.config.max_meta_description_chars}))
             if not page.h1s:
                 result.issues.append(self._issue("content.h1_missing", "page", page.url, "Indexable page has no H1 heading", edges))
             elif len(page.h1s) > 1:
                 result.issues.append(self._issue("content.multiple_h1", "page", page.url, f"Page contains {len(page.h1s)} H1 headings", edges, {"count": len(page.h1s), "headings": page.h1s}))
+            skipped = [(left, right) for left, right in zip(page.heading_levels, page.heading_levels[1:]) if right > left + 1]
+            if skipped:
+                result.issues.append(self._issue("content.heading_order_skipped", "page", page.url, "Heading hierarchy skips one or more levels", edges, {"transitions": skipped, "levels": page.heading_levels}))
             if page.word_count < self.config.min_content_words:
                 result.issues.append(self._issue("content.thin", "page", page.url, f"Page contains approximately {page.word_count} visible words", edges, {"words": page.word_count, "threshold": self.config.min_content_words}))
             if not page.viewport:
@@ -730,6 +758,18 @@ class Scanner:
             missing_alt = sorted({image.url for image in page.images if image.alt is None})
             if missing_alt:
                 result.issues.append(self._issue("content.image_alt_missing", "page", page.url, f"Page contains {len(missing_alt)} images without alt attributes", edges, {"images": missing_alt}))
+            empty_links = sorted({link.url for link in page.links if not link.text and _same_hostname(page.final_url or page.url, link.url)})
+            if empty_links:
+                result.issues.append(self._issue("link.text_missing", "page", page.url, f"Page contains {len(empty_links)} internal links without descriptive text", edges, {"links": empty_links}))
+            nofollow_links = sorted({link.url for link in page.links if link.nofollow and _same_hostname(page.final_url or page.url, link.url)})
+            if nofollow_links:
+                result.issues.append(self._issue("link.internal_nofollow", "page", page.url, f"Page contains {len(nofollow_links)} nofollow internal links", edges, {"links": nofollow_links}))
+            insecure_links = sorted({link.url for link in page.links if (page.final_url or page.url).startswith("https://") and link.url.startswith("http://") and _same_hostname(page.final_url or page.url, link.url)})
+            if insecure_links:
+                result.issues.append(self._issue("link.insecure_internal", "page", page.url, f"HTTPS page contains {len(insecure_links)} insecure internal links", edges, {"links": insecure_links}))
+            not_found_text = " ".join([page.title, *page.h1s]).casefold()
+            if page.status == 200 and page.word_count <= self.config.max_soft_404_words and _looks_not_found(not_found_text):
+                result.issues.append(self._issue("page.soft_404", "page", page.url, "HTTP 200 page has a not-found title or primary heading and little content", edges, {"words": page.word_count, "threshold": self.config.max_soft_404_words}))
             if not page.og_title:
                 result.issues.append(self._issue("social.og_title_missing", "page", page.url, "Indexable page has no og:title value", edges))
             if not page.og_description:
@@ -740,6 +780,7 @@ class Scanner:
                 result.issues.append(self._issue("social.twitter_card_missing", "page", page.url, "Indexable page has no twitter:card value", edges))
         self._add_duplicate_content_issues(result, pages, edges, "title", "content.duplicate_title")
         self._add_duplicate_content_issues(result, pages, edges, "meta_description", "content.duplicate_meta_description")
+        self._add_duplicate_content_issues(result, [page for page in pages if page.h1s], edges, "primary_h1", "content.duplicate_h1")
         self._add_duplicate_body_issues(result, pages, edges)
         self._add_image_delivery_issues(result, pages, edges)
 
@@ -795,7 +836,8 @@ class Scanner:
     def _add_duplicate_content_issues(self, result: CrawlResult, pages: list[Page], edges: set[Edge], attribute: str, rule_id: str) -> None:
         groups: dict[str, list[Page]] = {}
         for page in pages:
-            value = " ".join(str(getattr(page, attribute)).split())
+            raw_value = page.h1s[0] if attribute == "primary_h1" and page.h1s else getattr(page, attribute, "")
+            value = " ".join(str(raw_value).split())
             if value:
                 groups.setdefault(value.casefold(), []).append(page)
         for matches in groups.values():
@@ -803,7 +845,8 @@ class Scanner:
                 continue
             urls = sorted(page.url for page in matches)
             for page in matches:
-                result.issues.append(self._issue(rule_id, "page", page.url, f"Content is shared by {len(matches)} indexable pages", edges, {"value": getattr(page, attribute), "urls": urls}))
+                raw_value = page.h1s[0] if attribute == "primary_h1" else getattr(page, attribute)
+                result.issues.append(self._issue(rule_id, "page", page.url, f"Content is shared by {len(matches)} indexable pages", edges, {"value": raw_value, "urls": urls}))
 
     def _limit(self, result: CrawlResult, deadline: float, condition: bool, reason: str) -> bool:
         actual = "max_duration_seconds" if time.monotonic() >= deadline else reason if condition else None
@@ -847,6 +890,14 @@ def _content_languages(value: str) -> list[str]:
 
 def _normalized_text(value: str) -> str:
     return " ".join(value.split())
+
+
+def _same_hostname(left: str, right: str) -> bool:
+    return bool(urlsplit(left).hostname and urlsplit(left).hostname == urlsplit(right).hostname)
+
+
+def _looks_not_found(value: str) -> bool:
+    return bool(re.search(r"\b(?:404|page (?:not found|does not exist|doesn't exist|cannot be found)|content not found|we (?:could not|couldn't) find)\b", value))
 
 
 def _expected_mime(kind: str) -> tuple[str, ...]:
