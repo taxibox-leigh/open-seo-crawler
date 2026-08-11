@@ -119,6 +119,16 @@ class Scanner:
                 result.issues.append(self._issue("render.excessive_transfer", "page", page.url, f"Rendered page transferred {page.transfer_bytes} bytes", evidence={"transfer_bytes": page.transfer_bytes, "threshold": self.config.max_render_transfer_bytes}))
             if page.network_requests_truncated:
                 result.issues.append(self._issue("render.network_inventory_truncated", "page", page.url, "Rendered network inventory reached its configured request limit", evidence={"captured": len(page.network_requests), "observed": page.request_count, "limit": self.config.max_render_network_requests_per_page}))
+            if page.accessibility_error:
+                result.issues.append(self._issue("accessibility.unavailable", "page", page.url, page.accessibility_error))
+            critical = [item for item in page.accessibility_violations if item.get("impact") in {"critical", "serious"}]
+            other = [item for item in page.accessibility_violations if item.get("impact") not in {"critical", "serious"}]
+            if critical:
+                result.issues.append(self._issue("accessibility.critical_violations", "page", page.url, f"axe-core found {len(critical)} critical or serious violation types", evidence={"violations": critical}))
+            if other:
+                result.issues.append(self._issue("accessibility.violations", "page", page.url, f"axe-core found {len(other)} accessibility violation types", evidence={"violations": other}))
+            if page.accessibility_truncated:
+                result.issues.append(self._issue("accessibility.inventory_truncated", "page", page.url, "Accessibility evidence reached its configured limit", evidence={"captured_violation_types": len(page.accessibility_violations), "observed_violation_types": page.accessibility_violations_total}))
 
     def _crawl_pages(self, fetcher: Fetcher, state: _RunState) -> None:
         while state.page_queue:

@@ -65,6 +65,15 @@ class FakePage:
     def wait_for_timeout(self, _) -> None:
         pass
 
+    def add_script_tag(self, **_) -> None:
+        pass
+
+    def evaluate(self, *_):
+        return {"total": 2, "violations": [
+            {"id": "button-name", "impact": "critical", "nodes": [{"target": ["button"]}], "nodes_total": 1},
+            {"id": "landmark-one-main", "impact": "moderate", "nodes": [{"target": ["body"]}], "nodes_total": 2},
+        ]}
+
     def close(self) -> None:
         pass
 
@@ -288,6 +297,26 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(
             {issue.rule_id for issue in result.issues},
             {"render.excessive_requests", "render.excessive_transfer", "render.network_inventory_truncated"},
+        )
+
+    def test_optional_axe_accessibility_is_bounded_and_classified(self) -> None:
+        with TemporaryDirectory() as directory:
+            axe_script = Path(directory) / "axe.min.js"
+            axe_script.write_text("window.axe = {};", encoding="utf-8")
+            config = ScannerConfig(
+                render_enabled=True, accessibility_enabled=True, axe_script_path=str(axe_script),
+                max_rendered_pages=1, render_settle_ms=0,
+            )
+            pages, setup_error = render_pages(["https://example.com/"], config, browser_factory=FakePlaywright)
+        self.assertEqual(setup_error, "")
+        self.assertEqual(pages[0].accessibility_violations_total, 2)
+        self.assertTrue(pages[0].accessibility_truncated)
+        result = CrawlResult(start_url="https://example.com/", started_at="now", pages=[Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1)])
+        with patch("seo_scanner.runner.render_pages", return_value=(pages, "")):
+            Scanner(config)._run_rendered_diagnostics(result)
+        self.assertEqual(
+            {issue.rule_id for issue in result.issues if issue.rule_id.startswith("accessibility.")},
+            {"accessibility.critical_violations", "accessibility.violations", "accessibility.inventory_truncated"},
         )
 
     def test_url_normalization(self) -> None:
@@ -514,7 +543,7 @@ class IntegrationTests(unittest.TestCase):
             ndjson = [json.loads(line) for line in ndjson_output.read_text(encoding="utf-8").splitlines()]
             sarif = json.loads(sarif_output.read_text(encoding="utf-8"))
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.17")
+        self.assertEqual(report["schema_version"], "1.18")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
         self.assertEqual(ndjson[0]["type"], "scan")
