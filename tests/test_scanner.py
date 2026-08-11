@@ -4,6 +4,7 @@ import json
 import threading
 import unittest
 import requests
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -20,7 +21,7 @@ from seo_scanner.baseline import apply_suppressions, compare_with_baseline
 from seo_scanner.config import ScannerConfig
 from seo_scanner.discovery import discover_css, discover_html
 from seo_scanner.fetch import Fetcher, FetchResponse
-from seo_scanner.runner import Scanner, _is_browser_subresource
+from seo_scanner.runner import Scanner, _RunState, _is_browser_subresource
 from seo_scanner.scope import normalize_url
 from seo_scanner.models import CrawlResult, Edge, ImageReference, Issue, Page, Resource, SitemapDocument
 from seo_scanner.render import render_pages, select_render_urls
@@ -301,6 +302,62 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(signals.invalid_robots_directives, ["madeup"])
         self.assertEqual(signals.jsonld_errors, [])
 
+    def test_indexability_declarations_retain_all_values_and_conflicts(self) -> None:
+        signals = extract_page_signals(
+            "https://example.com/page",
+            '''<link rel="canonical" href="/first"><link rel="canonical" href="/second">
+            <link rel="canonical"><link rel="canonical" href="mailto:test@example.com">
+            <meta name="robots" content="index, noindex, follow, nofollow">
+            <meta http-equiv="Refresh" content="2.5; URL='/next'">''',
+        )
+        self.assertEqual(signals.canonical_urls, ["https://example.com/first", "https://example.com/second"])
+        self.assertEqual(signals.invalid_canonical_values, ["<missing href>", "mailto:test@example.com"])
+        self.assertEqual(
+            signals.robots_conflicts,
+            ["index conflicts with noindex/none", "follow conflicts with nofollow/none"],
+        )
+        self.assertEqual(signals.meta_refresh_delay, 2.5)
+        self.assertEqual(signals.meta_refresh_url, "https://example.com/next")
+
+    def test_indexability_response_rules_and_canonical_queueing(self) -> None:
+        html = b'''<link rel="canonical" href="/first"><link rel="canonical" href="/second">
+            <link rel="canonical"><meta name="robots" content="all, noindex">
+            <meta http-equiv="refresh" content="0;url=/next">'''
+        response = FetchResponse(
+            "https://example.com/page", "https://example.com/page", 200,
+            "text/html", html, len(html), 1, [], False, {"refresh": "0; url=/header-target"},
+        )
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        state = _RunState("https://example.com/", result, float("inf"), deque(), set())
+
+        class StubFetcher:
+            def get(self, *_):
+                return response
+
+        Scanner()._fetch_page(StubFetcher(), state, response.requested_url)
+        self.assertEqual(
+            {"canonical.multiple", "canonical.invalid", "directive.conflicting_robots", "page.meta_refresh", "page.refresh_header"},
+            {issue.rule_id for issue in result.issues},
+        )
+        self.assertEqual(set(state.page_queue), {"https://example.com/first", "https://example.com/second"})
+        self.assertEqual(
+            {edge.target_url for edge in state.edges if edge.context == "link.canonical"},
+            {"https://example.com/first", "https://example.com/second"},
+        )
+        self.assertEqual(result.pages[0].refresh_header, "0; url=/header-target")
+
+    def test_missing_canonical_only_applies_to_indexable_html(self) -> None:
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [
+            Page("https://example.com/indexable", "https://example.com/indexable", 200, "text/html", 1, 1),
+            Page("https://example.com/noindex", "https://example.com/noindex", 200, "text/html", 1, 1, robots_directives=["noindex"]),
+            Page("https://example.com/image", "https://example.com/image", 200, "image/png", 1, 1),
+            Page("https://example.com/invalid", "https://example.com/invalid", 200, "text/html", 1, 1, invalid_canonical_values=["<missing href>"]),
+        ]
+        Scanner()._add_content_issues(result, set())
+        missing = [issue.url for issue in result.issues if issue.rule_id == "canonical.missing"]
+        self.assertEqual(missing, ["https://example.com/indexable"])
+
     def test_jsonld_block_types_and_structural_duplicates(self) -> None:
         signals = extract_page_signals(
             "https://example.com/",
@@ -422,7 +479,7 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.15")
+        self.assertEqual(report["schema_version"], "1.16")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
 

@@ -153,7 +153,10 @@ class Scanner:
             bytes=len(response.body), duration_ms=response.duration_ms, title=content.title,
             meta_description=content.meta_description, h1s=content.h1s, word_count=content.word_count,
             truncated=response.truncated, redirect_hops=response.redirect_hops, canonical_url=signals.canonical_url,
+            canonical_urls=signals.canonical_urls, invalid_canonical_values=signals.invalid_canonical_values,
             robots_directives=signals.robots_directives, invalid_robots_directives=signals.invalid_robots_directives,
+            robots_conflicts=signals.robots_conflicts, meta_refresh_url=signals.meta_refresh_url,
+            meta_refresh_delay=signals.meta_refresh_delay, refresh_header=response.headers.get("refresh", ""),
             jsonld_errors=signals.jsonld_errors, jsonld_blocks=signals.jsonld_blocks,
             jsonld_integrity_errors=signals.jsonld_integrity_errors,
             jsonld_integrity_warnings=signals.jsonld_integrity_warnings,
@@ -192,6 +195,17 @@ class Scanner:
             result.issues.append(self._issue("page.slow_response", "page", url, f"Page response took {response.duration_ms} ms", edges, {"duration_ms": response.duration_ms, "threshold": self.config.max_page_duration_ms}))
         if signals.invalid_robots_directives:
             result.issues.append(self._issue("directive.invalid_robots", "page", url, "Unsupported robots directives were found", edges, {"directives": signals.invalid_robots_directives}))
+        if signals.robots_conflicts:
+            result.issues.append(self._issue("directive.conflicting_robots", "page", url, "Contradictory robots directives were found", edges, {"conflicts": signals.robots_conflicts, "directives": signals.robots_directives}))
+        canonical_count = len(signals.canonical_urls) + len(signals.invalid_canonical_values)
+        if canonical_count > 1:
+            result.issues.append(self._issue("canonical.multiple", "page", url, f"Page contains {canonical_count} canonical declarations", edges, {"canonical_urls": signals.canonical_urls, "invalid_values": signals.invalid_canonical_values}))
+        if signals.invalid_canonical_values:
+            result.issues.append(self._issue("canonical.invalid", "page", url, "One or more canonical declarations cannot be resolved", edges, {"values": signals.invalid_canonical_values}))
+        if signals.meta_refresh_delay is not None:
+            result.issues.append(self._issue("page.meta_refresh", "page", url, "Page uses a meta refresh directive", edges, {"delay_seconds": signals.meta_refresh_delay, "target_url": signals.meta_refresh_url}))
+        if response.headers.get("refresh"):
+            result.issues.append(self._issue("page.refresh_header", "page", url, "Page response uses an HTTP Refresh header", edges, {"refresh": response.headers["refresh"]}))
         if signals.jsonld_errors:
             result.issues.append(self._issue("structured_data.invalid_jsonld", "page", url, "One or more JSON-LD blocks are invalid", edges, {"errors": signals.jsonld_errors}))
         if signals.duplicate_jsonld_blocks:
@@ -222,10 +236,10 @@ class Scanner:
     def _queue_page_discoveries(self, state: _RunState, final_url: str, html: str, signals: PageSignals, content: PageContent) -> None:
         links, resources, found_edges = discover_html(final_url, html)
         state.edges.update(found_edges)
-        if signals.canonical_url:
-            state.edges.add(Edge(final_url, signals.canonical_url, "link.canonical"))
-            if same_origin(state.start_url, signals.canonical_url):
-                self._enqueue_page(state, signals.canonical_url)
+        for canonical_url in dict.fromkeys(signals.canonical_urls):
+            state.edges.add(Edge(final_url, canonical_url, "link.canonical"))
+            if same_origin(state.start_url, canonical_url):
+                self._enqueue_page(state, canonical_url)
         for reference in signals.hreflang:
             state.edges.add(Edge(final_url, reference.url, f"link.hreflang:{reference.language}"))
             if same_origin(state.start_url, reference.url):
@@ -578,6 +592,8 @@ class Scanner:
     def _add_content_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
         pages = [page for page in result.pages if _is_indexable_html(page)]
         for page in pages:
+            if not page.canonical_urls and not page.invalid_canonical_values:
+                result.issues.append(self._issue("canonical.missing", "page", page.url, "Indexable page has no canonical declaration", edges))
             if not page.title:
                 result.issues.append(self._issue("content.title_missing", "page", page.url, "Indexable page has no title element", edges))
             elif len(page.title) > self.config.max_title_chars:

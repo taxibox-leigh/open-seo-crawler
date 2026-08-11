@@ -411,8 +411,9 @@ deleting evidence. Suppressed errors do not affect the CLI failure exit code.
 
 The scanner also validates every discovered same-origin link and canonical target.
 It reports broken or redirecting internal links with referring-page attribution,
-canonical errors/chains/loops, noindex/canonical conflicts, invalid robots tokens,
-and malformed JSON-LD blocks.
+canonical errors/chains/loops, missing/multiple/invalid canonical declarations,
+conflicting or invalid robots directives, meta and HTTP refresh behavior, and
+malformed JSON-LD blocks. Every valid canonical target is retained and checked.
 
 Sitemap discovery reads robots.txt and the conventional sitemap location, follows
 same-origin sitemap indexes within a configurable bound, and adds sitemap URLs to

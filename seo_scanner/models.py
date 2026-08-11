@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.15"
+SCHEMA_VERSION = "1.16"
 
 
 @dataclass(frozen=True)
@@ -54,8 +54,14 @@ class Page:
     truncated: bool = False
     redirect_hops: list[str] = field(default_factory=list)
     canonical_url: str = ""
+    canonical_urls: list[str] = field(default_factory=list)
+    invalid_canonical_values: list[str] = field(default_factory=list)
     robots_directives: list[str] = field(default_factory=list)
     invalid_robots_directives: list[str] = field(default_factory=list)
+    robots_conflicts: list[str] = field(default_factory=list)
+    meta_refresh_url: str = ""
+    meta_refresh_delay: float | None = None
+    refresh_header: str = ""
     jsonld_errors: list[str] = field(default_factory=list)
     jsonld_blocks: list[dict[str, Any]] = field(default_factory=list)
     jsonld_integrity_errors: list[str] = field(default_factory=list)

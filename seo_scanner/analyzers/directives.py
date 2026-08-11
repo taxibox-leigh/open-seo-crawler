@@ -13,8 +13,13 @@ from ..models import HreflangReference
 @dataclass
 class PageSignals:
     canonical_url: str = ""
+    canonical_urls: list[str] = field(default_factory=list)
+    invalid_canonical_values: list[str] = field(default_factory=list)
     robots_directives: list[str] = field(default_factory=list)
     invalid_robots_directives: list[str] = field(default_factory=list)
+    robots_conflicts: list[str] = field(default_factory=list)
+    meta_refresh_url: str = ""
+    meta_refresh_delay: float | None = None
     jsonld_errors: list[str] = field(default_factory=list)
     jsonld_blocks: list[dict[str, object]] = field(default_factory=list)
     duplicate_jsonld_blocks: list[dict[str, object]] = field(default_factory=list)
@@ -29,13 +34,31 @@ _VALUE_DIRECTIVES = {"max-snippet", "max-image-preview", "max-video-preview", "u
 
 def extract_page_signals(page_url: str, html: str, x_robots_tag: str = "") -> PageSignals:
     soup = BeautifulSoup(html, "lxml")
-    canonical = soup.select_one('link[rel~="canonical"][href]')
-    canonical_url = normalize_url(page_url, canonical.get("href", "")) if canonical else None
+    canonical_tags = soup.select('link[rel~="canonical"]')
+    canonical_urls: list[str] = []
+    invalid_canonicals: list[str] = []
+    for canonical in canonical_tags:
+        raw_value = str(canonical.get("href", "")).strip()
+        target = normalize_url(page_url, raw_value) if raw_value else None
+        if target:
+            canonical_urls.append(target)
+        else:
+            invalid_canonicals.append(raw_value or "<missing href>")
+    canonical_url = canonical_urls[0] if canonical_urls else None
     raw_directives = [tag.get("content", "") for tag in soup.select('meta[name="robots" i], meta[name="googlebot" i], meta[name="bingbot" i]')]
     if x_robots_tag:
         raw_directives.append(x_robots_tag)
     directives = _parse_directives(raw_directives)
     invalid = sorted({item for item in directives if not _valid_directive(item)})
+    conflicts = _directive_conflicts(directives)
+    refresh_url = ""
+    refresh_delay = None
+    refresh = soup.find("meta", attrs={"http-equiv": re.compile(r"^refresh$", re.I)})
+    if refresh:
+        match = re.match(r"\s*([0-9]+(?:\.[0-9]+)?)\s*(?:;\s*url\s*=\s*['\"]?([^'\"]+))?", str(refresh.get("content", "")), re.I)
+        if match:
+            refresh_delay = float(match.group(1))
+            refresh_url = normalize_url(page_url, match.group(2).strip()) if match.group(2) else ""
     jsonld_errors: list[str] = []
     jsonld_blocks: list[dict[str, object]] = []
     blocks_by_value: dict[str, list[int]] = {}
@@ -66,8 +89,11 @@ def extract_page_signals(page_url: str, html: str, x_robots_tag: str = "") -> Pa
         if target and language:
             hreflang.append(HreflangReference(language, target))
     return PageSignals(
-        canonical_url=canonical_url or "", robots_directives=sorted(set(directives)),
-        invalid_robots_directives=invalid, jsonld_errors=jsonld_errors,
+        canonical_url=canonical_url or "", canonical_urls=canonical_urls,
+        invalid_canonical_values=invalid_canonicals,
+        robots_directives=sorted(set(directives)), invalid_robots_directives=invalid,
+        robots_conflicts=conflicts, meta_refresh_url=refresh_url or "",
+        meta_refresh_delay=refresh_delay, jsonld_errors=jsonld_errors,
         jsonld_blocks=jsonld_blocks, duplicate_jsonld_blocks=duplicates,
         jsonld_integrity_errors=integrity_errors,
         jsonld_integrity_warnings=integrity_warnings, hreflang=hreflang,
@@ -165,3 +191,15 @@ def _valid_directive(value: str) -> bool:
         return True
     name, separator, argument = value.partition(":")
     return bool(separator and argument.strip() and name.strip() in _VALUE_DIRECTIVES)
+
+
+def _directive_conflicts(directives: list[str]) -> list[str]:
+    values = set(directives)
+    conflicts: list[str] = []
+    if "index" in values and values & {"noindex", "none"}:
+        conflicts.append("index conflicts with noindex/none")
+    if "follow" in values and values & {"nofollow", "none"}:
+        conflicts.append("follow conflicts with nofollow/none")
+    if "all" in values and values & {"noindex", "nofollow", "none"}:
+        conflicts.append("all conflicts with restrictive directives")
+    return conflicts
