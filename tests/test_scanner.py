@@ -10,6 +10,7 @@ from pathlib import Path
 
 from seo_scanner.cli import main
 from seo_scanner.analyzers.image import inspect_image
+from seo_scanner.analyzers.content import extract_page_content
 from seo_scanner.analyzers.directives import extract_page_signals
 from seo_scanner.analyzers.sitemap import parse_sitemap
 from seo_scanner.analyzers.hreflang import valid_language_tag
@@ -132,6 +133,29 @@ class FixtureServer:
 
 
 class UnitTests(unittest.TestCase):
+    def test_page_content_extracts_metadata_headings_and_visible_words(self) -> None:
+        content = extract_page_content('''<title> Example title </title><meta NAME="Description" content="A useful summary">
+            <h1>Main <span>heading</span></h1><p>Three visible words.</p><script>ignored script words</script>''')
+        self.assertEqual(content.title, "Example title")
+        self.assertEqual(content.meta_description, "A useful summary")
+        self.assertEqual(content.h1s, ["Main heading"])
+        self.assertEqual(content.word_count, 7)
+
+    def test_content_rules_cover_missing_long_duplicate_and_thin_pages(self) -> None:
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [
+            Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1, title="Shared title", meta_description="Shared description", h1s=["One", "Two"], word_count=2),
+            Page("https://example.com/b", "https://example.com/b", 200, "text/html", 1, 1, title="Shared title", meta_description="Shared description", word_count=0),
+        ]
+        scanner = Scanner(ScannerConfig(max_title_chars=5, max_meta_description_chars=5, min_content_words=3))
+        scanner._add_content_issues(result, set())
+        rules = [issue.rule_id for issue in result.issues]
+        self.assertEqual(rules.count("content.duplicate_title"), 2)
+        self.assertEqual(rules.count("content.duplicate_meta_description"), 2)
+        self.assertIn("content.multiple_h1", rules)
+        self.assertIn("content.h1_missing", rules)
+        self.assertEqual(rules.count("content.thin"), 2)
+
     def test_daily_render_sample_rotates_all_sorted_urls_without_state(self) -> None:
         config = ScannerConfig(max_rendered_pages=2, render_sample_strategy="daily_rotation")
         urls = [f"https://example.com/{item}" for item in ("e", "c", "a", "d", "b")]
@@ -314,7 +338,7 @@ class IntegrationTests(unittest.TestCase):
             report = json.loads(output.read_text(encoding="utf-8"))
             csv_text = csv_output.read_text(encoding="utf-8-sig")
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.9")
+        self.assertEqual(report["schema_version"], "1.10")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
 

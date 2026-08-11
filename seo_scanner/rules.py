@@ -68,6 +68,15 @@ RULES = {
         Rule("render.console_errors", "Browser rendering emitted console errors", "warning", "Resolve actionable browser console errors and verify the page still renders correctly."),
         Rule("architecture.deep_page", "Page exceeds the configured click depth", "warning", "Add useful internal links that bring important pages closer to the site entry point."),
         Rule("architecture.sitemap_orphan", "Sitemap page has no incoming internal links", "warning", "Link to the page from relevant indexable content, or remove it from the sitemap if it should not be discovered."),
+        Rule("content.title_missing", "Page title is missing", "error", "Add a unique, descriptive title element."),
+        Rule("content.title_too_long", "Page title exceeds the configured length", "warning", "Shorten the title while retaining its primary topic and intent."),
+        Rule("content.duplicate_title", "Multiple pages share the same title", "warning", "Give each indexable page a distinct title that describes its unique purpose."),
+        Rule("content.meta_description_missing", "Meta description is missing", "warning", "Add a useful description for the page's search snippet."),
+        Rule("content.meta_description_too_long", "Meta description exceeds the configured length", "warning", "Shorten the description so its key message is less likely to be truncated."),
+        Rule("content.duplicate_meta_description", "Multiple pages share the same meta description", "warning", "Write a distinct description for each indexable page."),
+        Rule("content.h1_missing", "Page has no H1 heading", "warning", "Add one clear primary heading that describes the page."),
+        Rule("content.multiple_h1", "Page has multiple H1 headings", "warning", "Use one primary H1 and structure subordinate headings with lower levels."),
+        Rule("content.thin", "Page has little visible text content", "warning", "Add useful original content that satisfies the page's search intent."),
     )
 }
 
