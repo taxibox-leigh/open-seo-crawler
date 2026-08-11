@@ -17,6 +17,7 @@ from seo_scanner.analyzers.directives import extract_page_signals
 from seo_scanner.analyzers.sitemap import parse_sitemap
 from seo_scanner.analyzers.hreflang import valid_language_tag
 from seo_scanner.analyzers.encoding import EncodingSignals, analyze_encoding
+from seo_scanner.analyzers.document import DocumentSignals, analyze_document
 from seo_scanner.analyzers.robots import parse_robots
 from seo_scanner.analyzers.url_quality import analyze_url
 from seo_scanner.baseline import apply_suppressions, compare_with_baseline
@@ -427,6 +428,37 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(result.pages[0].http_charset, "utf-8")
         self.assertEqual(result.pages[0].meta_charsets, ["windows-1252", "invalid-charset"])
 
+    def test_document_structure_duplicate_content_and_image_delivery(self) -> None:
+        document = analyze_document(
+            '<html><head><title>One</title><title>Two</title></head><body>'
+            '<meta name="description" content="outside"><body></body></html>'
+        )
+        self.assertEqual((document.head_count, document.body_count, document.title_count), (1, 2, 2))
+        self.assertTrue(document.meta_description_outside_head)
+
+        repeated = " ".join(f"word{index}" for index in range(120))
+        first_content = extract_page_content(f"<html><body>{repeated}</body></html>")
+        second_content = extract_page_content(f"<html><body>{repeated}</body></html>")
+        similar_content = extract_page_content(f"<html><body>{repeated} additional</body></html>")
+        pages = [
+            Page("https://example.com/a", "https://example.com/a", 200, "text/html", 1, 1, word_count=120, visible_text_hash=first_content.visible_text_hash, visible_text_fingerprint=first_content.visible_text_fingerprint,
+                 images=[ImageReference("https://example.com/hero.jpg", "Hero")]),
+            Page("https://example.com/b", "https://example.com/b", 200, "text/html", 1, 1, word_count=120, visible_text_hash=second_content.visible_text_hash, visible_text_fingerprint=second_content.visible_text_fingerprint),
+            Page("https://example.com/c", "https://example.com/c", 200, "text/html", 1, 1, word_count=121, visible_text_hash=similar_content.visible_text_hash, visible_text_fingerprint=similar_content.visible_text_fingerprint),
+        ]
+        result = CrawlResult(start_url="https://example.com/", started_at="now", pages=pages, resources=[
+            Resource("https://example.com/hero.jpg", kind="image", status=200, bytes=150_000, image_width=1600, image_height=900, image_format="JPEG"),
+        ])
+        scanner = Scanner(ScannerConfig(min_duplicate_content_words=100, min_responsive_image_width=1000, min_legacy_image_bytes=100_000))
+        scanner._add_duplicate_body_issues(result, pages, set())
+        scanner._add_image_delivery_issues(result, pages, set())
+        rules = [issue.rule_id for issue in result.issues]
+        self.assertEqual(rules.count("content.duplicate_body"), 2)
+        self.assertEqual(rules.count("content.near_duplicate_body"), 3)
+        self.assertIn("image.missing_dimensions", rules)
+        self.assertIn("image.missing_responsive_source", rules)
+        self.assertIn("image.legacy_format", rules)
+
     def test_missing_and_empty_html_language_are_distinct(self) -> None:
         missing = extract_page_signals("https://example.com/", "<html><body></body></html>")
         empty = extract_page_signals("https://example.com/", '<html lang=""><body></body></html>')
@@ -468,7 +500,7 @@ class UnitTests(unittest.TestCase):
 
         Scanner()._fetch_page(StubFetcher(), state, response.requested_url)
         self.assertEqual(
-            {"canonical.multiple", "canonical.invalid", "directive.conflicting_robots", "page.meta_refresh", "page.refresh_header", "language.html_missing", "encoding.missing"},
+            {"canonical.multiple", "canonical.invalid", "directive.conflicting_robots", "page.meta_refresh", "page.refresh_header", "language.html_missing", "encoding.missing", "document.head_missing", "document.body_missing"},
             {issue.rule_id for issue in result.issues},
         )
         self.assertEqual(set(state.page_queue), {"https://example.com/first", "https://example.com/second"})
@@ -539,6 +571,8 @@ class UnitTests(unittest.TestCase):
             ScannerConfig(max_pages=0)
         with self.assertRaises(ValueError):
             ScannerConfig(max_page_bytes=100, max_page_size=101)
+        with self.assertRaises(ValueError):
+            ScannerConfig(near_duplicate_similarity=1.1)
 
     def test_page_transport_rules_cover_size_speed_and_redirect_chains(self) -> None:
         response = FetchResponse(
@@ -549,10 +583,10 @@ class UnitTests(unittest.TestCase):
         )
         result = CrawlResult(start_url="https://example.com/", started_at="now")
         scanner = Scanner(ScannerConfig(max_page_size=100, max_page_duration_ms=100))
-        scanner._add_page_response_issues(result, response.requested_url, response, extract_page_signals(response.final_url, "", ""), EncodingSignals(), set())
+        scanner._add_page_response_issues(result, response.requested_url, response, extract_page_signals(response.final_url, "", ""), EncodingSignals(), DocumentSignals(), set())
         self.assertEqual(
             {issue.rule_id for issue in result.issues},
-            {"page.oversized", "page.slow_response", "page.redirect_chain", "language.html_missing", "encoding.missing"},
+            {"page.oversized", "page.slow_response", "page.redirect_chain", "language.html_missing", "encoding.missing", "document.head_missing", "document.body_missing"},
         )
 
 
@@ -615,7 +649,7 @@ class IntegrationTests(unittest.TestCase):
             ndjson = [json.loads(line) for line in ndjson_output.read_text(encoding="utf-8").splitlines()]
             sarif = json.loads(sarif_output.read_text(encoding="utf-8"))
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.20")
+        self.assertEqual(report["schema_version"], "1.21")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
         self.assertEqual(ndjson[0]["type"], "scan")

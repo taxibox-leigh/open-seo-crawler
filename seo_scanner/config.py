@@ -51,9 +51,13 @@ class ScannerConfig:
     max_page_duration_ms: int = 3000
     max_url_chars: int = 115
     max_query_parameters: int = 3
+    min_duplicate_content_words: int = 100
+    near_duplicate_similarity: float = 0.90
+    min_responsive_image_width: int = 1000
+    min_legacy_image_bytes: int = 100_000
 
     def __post_init__(self) -> None:
-        positive = ("max_pages", "max_resources", "max_total_bytes", "max_resource_bytes", "max_resource_size", "max_image_width", "max_image_height", "min_compression_bytes", "min_cache_seconds", "max_sitemaps", "max_urls_per_sitemap", "max_sitemap_bytes", "max_external_links", "max_link_bytes", "timeout_seconds", "max_duration_seconds", "max_rendered_pages", "render_navigation_timeout_ms", "max_render_events_per_page", "max_render_network_requests_per_page", "max_render_request_count", "max_render_transfer_bytes", "max_accessibility_violations_per_page", "max_accessibility_nodes_per_violation", "max_click_depth", "max_title_chars", "max_meta_description_chars", "min_content_words", "max_robots_bytes", "max_page_bytes", "max_page_size", "max_page_duration_ms", "max_url_chars", "max_query_parameters")
+        positive = ("max_pages", "max_resources", "max_total_bytes", "max_resource_bytes", "max_resource_size", "max_image_width", "max_image_height", "min_compression_bytes", "min_cache_seconds", "max_sitemaps", "max_urls_per_sitemap", "max_sitemap_bytes", "max_external_links", "max_link_bytes", "timeout_seconds", "max_duration_seconds", "max_rendered_pages", "render_navigation_timeout_ms", "max_render_events_per_page", "max_render_network_requests_per_page", "max_render_request_count", "max_render_transfer_bytes", "max_accessibility_violations_per_page", "max_accessibility_nodes_per_violation", "max_click_depth", "max_title_chars", "max_meta_description_chars", "min_content_words", "max_robots_bytes", "max_page_bytes", "max_page_size", "max_page_duration_ms", "max_url_chars", "max_query_parameters", "min_duplicate_content_words", "min_responsive_image_width", "min_legacy_image_bytes")
         for name in positive:
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be greater than zero")
@@ -71,6 +75,8 @@ class ScannerConfig:
             raise ValueError("robots_user_agent must not be empty")
         if self.max_page_size > self.max_page_bytes:
             raise ValueError("max_page_size must not exceed max_page_bytes")
+        if not 0 < self.near_duplicate_similarity <= 1:
+            raise ValueError("near_duplicate_similarity must be greater than zero and at most one")
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "ScannerConfig":
