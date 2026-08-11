@@ -430,6 +430,10 @@ Hreflang declarations are retained as graph edges and checked for tag syntax,
 duplicate languages, self-references, reciprocal return links, target status and
 redirects, target indexability, and target canonical alignment.
 
+Document language checks validate the root `html lang` value and HTTP
+`Content-Language` tags, then compare them with each other and with valid
+self-referencing hreflang declarations.
+
 Optional rendered diagnostics retain a bounded network waterfall for each sampled
 page, including response status, resource type and transferred bytes. Reports flag
 excessive request counts, excessive transfer weight and truncated inventories.
