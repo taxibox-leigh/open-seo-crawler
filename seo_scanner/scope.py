@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from posixpath import normpath
 from urllib.parse import urldefrag, urljoin, urlsplit, urlunsplit
 
@@ -7,6 +8,12 @@ from urllib.parse import urldefrag, urljoin, urlsplit, urlunsplit
 def normalize_url(base_url: str, value: str) -> str | None:
     value = value.strip()
     if not value or value.startswith(("data:", "javascript:", "mailto:", "tel:", "blob:")):
+        return None
+    # Raw whitespace and Unicode control/format characters are not valid URL
+    # references. In particular, invisible format characters can turn pasted
+    # text such as `http://<zero-width>https//...` into a plausible hostname,
+    # producing false crawl and mixed-content findings.
+    if any(char.isspace() or unicodedata.category(char).startswith("C") for char in value):
         return None
     absolute, _ = urldefrag(urljoin(base_url, value))
     parts = urlsplit(absolute)
