@@ -460,6 +460,10 @@ Set `render_sample_strategy` to `daily_rotation` to sort eligible URLs into
 fixed-size slices and select `(UTC day-of-year - 1) modulo slice count`. This
 rotates coverage without persistent state; reports record the selected slice,
 slice count, and eligible-page count. The default `first` strategy is unchanged.
+The versioned page records also include title, meta description, H1 headings,
+visible word count, and crawl depth. Indexable HTML pages are checked for
+missing or overlong metadata, missing or multiple H1s, thin content, and
+duplicate titles/descriptions. Length and word-count thresholds are configurable.
 For scheduled batch environments, `Dockerfile.scanner` provides the same command
 in a non-root, stateless image; see `docs/SCANNER_CONTAINER.md` for baseline and
 output mount examples.

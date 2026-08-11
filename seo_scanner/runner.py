@@ -10,10 +10,9 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 import requests
-from bs4 import BeautifulSoup
-
 from .config import ScannerConfig
 from .analyzers.image import inspect_image
+from .analyzers.content import PageContent, extract_page_content
 from .analyzers.directives import PageSignals, extract_page_signals
 from .analyzers.sitemap import parse_sitemap, sitemap_locations_from_robots
 from .analyzers.hreflang import analyze_hreflang
@@ -79,6 +78,7 @@ class Scanner:
         self._add_canonical_issues(result, state.edges)
         self._add_sitemap_issues(result, state.edges)
         self._add_architecture_issues(result, state.edges)
+        self._add_content_issues(result, state.edges)
         result.issues.extend(analyze_hreflang(result))
         result.coverage.pages_queued = len(state.page_queue)
         result.coverage.resources_discovered = len(state.pending_resources)
@@ -135,12 +135,15 @@ class Scanner:
         result.coverage.bytes_downloaded += len(response.body)
         html = ""
         signals = PageSignals()
+        content = PageContent()
         if response.status < 400 and response.content_type in ("text/html", "application/xhtml+xml"):
             html = response.body.decode(_encoding(response.content_type), errors="replace")
             signals = extract_page_signals(response.final_url, html, response.headers.get("x-robots-tag", ""))
+            content = extract_page_content(html)
         result.pages.append(Page(
             url=url, final_url=response.final_url, status=response.status, content_type=response.content_type,
-            bytes=len(response.body), duration_ms=response.duration_ms, title=_title(response.body, response.content_type),
+            bytes=len(response.body), duration_ms=response.duration_ms, title=content.title,
+            meta_description=content.meta_description, h1s=content.h1s, word_count=content.word_count,
             truncated=response.truncated, redirect_hops=response.redirect_hops, canonical_url=signals.canonical_url,
             robots_directives=signals.robots_directives, invalid_robots_directives=signals.invalid_robots_directives,
             jsonld_errors=signals.jsonld_errors, jsonld_blocks=signals.jsonld_blocks,
@@ -483,6 +486,39 @@ class Scanner:
                     {"sitemap_url": url},
                 ))
 
+    def _add_content_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
+        pages = [page for page in result.pages if _is_indexable_html(page)]
+        for page in pages:
+            if not page.title:
+                result.issues.append(self._issue("content.title_missing", "page", page.url, "Indexable page has no title element", edges))
+            elif len(page.title) > self.config.max_title_chars:
+                result.issues.append(self._issue("content.title_too_long", "page", page.url, f"Title contains {len(page.title)} characters", edges, {"characters": len(page.title), "threshold": self.config.max_title_chars}))
+            if not page.meta_description:
+                result.issues.append(self._issue("content.meta_description_missing", "page", page.url, "Indexable page has no meta description", edges))
+            elif len(page.meta_description) > self.config.max_meta_description_chars:
+                result.issues.append(self._issue("content.meta_description_too_long", "page", page.url, f"Meta description contains {len(page.meta_description)} characters", edges, {"characters": len(page.meta_description), "threshold": self.config.max_meta_description_chars}))
+            if not page.h1s:
+                result.issues.append(self._issue("content.h1_missing", "page", page.url, "Indexable page has no H1 heading", edges))
+            elif len(page.h1s) > 1:
+                result.issues.append(self._issue("content.multiple_h1", "page", page.url, f"Page contains {len(page.h1s)} H1 headings", edges, {"count": len(page.h1s), "headings": page.h1s}))
+            if page.word_count < self.config.min_content_words:
+                result.issues.append(self._issue("content.thin", "page", page.url, f"Page contains approximately {page.word_count} visible words", edges, {"words": page.word_count, "threshold": self.config.min_content_words}))
+        self._add_duplicate_content_issues(result, pages, edges, "title", "content.duplicate_title")
+        self._add_duplicate_content_issues(result, pages, edges, "meta_description", "content.duplicate_meta_description")
+
+    def _add_duplicate_content_issues(self, result: CrawlResult, pages: list[Page], edges: set[Edge], attribute: str, rule_id: str) -> None:
+        groups: dict[str, list[Page]] = {}
+        for page in pages:
+            value = " ".join(str(getattr(page, attribute)).split())
+            if value:
+                groups.setdefault(value.casefold(), []).append(page)
+        for matches in groups.values():
+            if len(matches) < 2:
+                continue
+            urls = sorted(page.url for page in matches)
+            for page in matches:
+                result.issues.append(self._issue(rule_id, "page", page.url, f"Content is shared by {len(matches)} indexable pages", edges, {"value": getattr(page, attribute), "urls": urls}))
+
     def _limit(self, result: CrawlResult, deadline: float, condition: bool, reason: str) -> bool:
         actual = "max_duration_seconds" if time.monotonic() >= deadline else reason if condition else None
         if not actual:
@@ -515,13 +551,6 @@ def _now() -> str:
 
 def _encoding(_: str) -> str:
     return "utf-8"
-
-
-def _title(body: bytes, content_type: str) -> str:
-    if content_type not in ("text/html", "application/xhtml+xml"):
-        return ""
-    title = BeautifulSoup(body, "lxml").title
-    return title.get_text(" ", strip=True) if title else ""
 
 
 def _expected_mime(kind: str) -> tuple[str, ...]:
@@ -587,3 +616,11 @@ def _canonical_loops(canonicals: dict[str, str]) -> list[list[str]]:
         rotations = [tuple(loop[index:] + loop[:index]) for index in range(len(loop))]
         loops.add(min(rotations))
     return [list(loop) for loop in sorted(loops)]
+
+
+def _is_indexable_html(page: Page) -> bool:
+    if page.status >= 400 or page.redirect_hops or page.content_type not in ("text/html", "application/xhtml+xml"):
+        return False
+    if {"noindex", "none"} & set(page.robots_directives):
+        return False
+    return not page.canonical_url or page.canonical_url in {page.url, page.final_url}
