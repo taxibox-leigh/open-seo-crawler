@@ -1029,3 +1029,22 @@ class IntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DocumentClassificationTests(unittest.TestCase):
+    """Non-HTML URLs reached through <a href> are crawled so their status and
+    redirects are checked, but counting them as pages overstates site size."""
+
+    def test_documents_are_counted_separately_from_html_pages(self) -> None:
+        with FixtureServer() as base, TemporaryDirectory() as tmp:
+            output = Path(tmp) / "report.json"
+            self.assertIn(main([base, "--output", str(output), "--quiet"]), (0, 1, 3))
+            report = json.loads(output.read_text())
+        coverage = report["coverage"]
+        self.assertEqual(
+            coverage["pages_fetched"],
+            coverage["html_pages_fetched"] + coverage["documents_fetched"],
+        )
+        for page in report["pages"]:
+            expected = page["content_type"] in ("text/html", "application/xhtml+xml")
+            self.assertEqual(page["is_html"], expected, msg=page["url"])

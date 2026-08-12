@@ -1407,10 +1407,17 @@ def _parse_no_js_subset(html, base_url, domain=None):
 def _compute_js_diff(js, nojs):
     """Compare rendered (post-JS) fields against pre-JS subset and classify
     severity.
-    Severity ladder: critical (title/meta/schema), high (h1/word_count),
-    medium (links/images), none (page is server-rendered correctly).
+
+    Severity ladder: critical (title/meta/schema), high (h1/word_count), none.
+
+    Image and external-link counts are recorded but never raise severity.
+    Lazy loading and injected third-party widgets make them differ on almost
+    every page of a normal site — on a 691-page production crawl they alone
+    put 555 pages at 'medium', drowning the ~20 pages whose indexable content
+    actually changes under JavaScript. They stay in `context` as evidence.
     """
     fields_differ = []
+    context = []
     sev = 'none'
     rendered_title = (js.get('title') or '').strip()
     nojs_title = (nojs.get('title') or '').strip()
@@ -1434,25 +1441,25 @@ def _compute_js_diff(js, nojs):
     if js_wc > 0 and abs(js_wc - nojs_wc) / max(js_wc, 1) > 0.25:
         fields_differ.append('word_count')
         if sev != 'critical': sev = 'high'
+    # Internal links still count: a menu that only exists after JS changes what
+    # a non-rendering crawler can reach.
     js_il = js.get('internal_links') or 0
     nojs_il = nojs.get('internal_links_count') or 0
     if js_il > 0 and abs(js_il - nojs_il) / max(js_il, 1) > 0.25:
         fields_differ.append('internal_links')
-        if sev not in ('critical', 'high'): sev = 'medium'
+        if sev not in ('critical', 'high'): sev = 'high'
+    # Evidence only, below this line.
     js_el = js.get('external_links') or 0
     nojs_el = nojs.get('external_links_count') or 0
     if js_el > 0 and abs(js_el - nojs_el) / max(js_el, 1) > 0.25:
-        fields_differ.append('external_links')
-        if sev not in ('critical', 'high'): sev = 'medium'
+        context.append('external_links')
     js_imgs = js.get('images_total') or 0
     nojs_imgs = nojs.get('images_count') or 0
     if js_imgs > 0 and abs(js_imgs - nojs_imgs) / max(js_imgs, 1) > 0.10:
-        fields_differ.append('images_total')
-        if sev not in ('critical', 'high'): sev = 'medium'
+        context.append('images_total')
     if (js.get('images_no_alt') or 0) != (nojs.get('images_no_alt') or 0):
-        fields_differ.append('images_no_alt')
-        if sev not in ('critical', 'high'): sev = 'medium'
-    return {'severity': sev, 'fields': fields_differ}
+        context.append('images_no_alt')
+    return {'severity': sev, 'fields': fields_differ, 'context': context}
 
 
 def _detect_waf_block(resp):

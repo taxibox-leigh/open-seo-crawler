@@ -64,7 +64,7 @@ class Scanner:
             queued_pages={start},
         )
 
-        with Fetcher(self.config.user_agent, self.config.timeout_seconds) as fetcher:
+        with Fetcher(self.config.user_agent, self.config.timeout_seconds, self.config.verify_tls) as fetcher:
             if self.config.discover_sitemaps:
                 sitemap_pages, state.robots_policy = self._crawl_sitemaps(fetcher, result, start, state.deadline)
                 for sitemap_page in sitemap_pages:
@@ -202,7 +202,9 @@ class Scanner:
         signals.invalid_canonical_values.extend(header_links.invalid_canonical_values)
         signals.hreflang.extend(header_links.hreflang)
         signals.canonical_url = signals.canonical_urls[0] if signals.canonical_urls else ""
+        is_html = response.content_type in ("text/html", "application/xhtml+xml")
         result.pages.append(Page(
+            is_html=is_html,
             url=url, final_url=response.final_url, status=response.status, content_type=response.content_type,
             bytes=len(response.body), duration_ms=response.duration_ms, title=content.title,
             meta_description=content.meta_description, h1s=content.h1s, word_count=content.word_count,
@@ -237,6 +239,10 @@ class Scanner:
             fetch_attempts=attempts,
         ))
         result.coverage.pages_fetched += 1
+        if is_html:
+            result.coverage.html_pages_fetched += 1
+        else:
+            result.coverage.documents_fetched += 1
         self._add_page_response_issues(result, url, response, signals, encoding, document, state.edges)
         self._add_url_quality_issues(result, url, url_quality, state.edges)
         if html:

@@ -359,9 +359,9 @@ UNFIXTURED = {
     "resource.tls_error": "needs a broken certificate",
     "resource.redirect_loop": "needs a resource redirect cycle",
     "resource.response_truncated": "needs a response past the byte limit",
-    "page.fetch_failed": "needs a connection failure",
-    "page.timeout": "needs a hanging server",
-    "page.tls_error": "needs a broken certificate",
+    "page.fetch_failed": "covered by tests/test_transport_failures.py",
+    "page.timeout": "covered by tests/test_transport_failures.py",
+    "page.tls_error": "covered by tests/test_transport_failures.py",
     "page.redirect_loop": "needs a page redirect cycle",
     "page.response_truncated": "needs a response past the byte limit",
     "page.slow_response": "needs a slow server; timing-dependent",
@@ -372,7 +372,7 @@ UNFIXTURED = {
     "robots.unavailable": "needs robots.txt to fail at transport level",
     # Need HTTPS, which the fixture server does not serve.
     "resource.mixed_content": "needs an HTTPS page referencing HTTP",
-    "link.insecure_internal": "needs an HTTPS page linking to HTTP",
+    "link.insecure_internal": "covered by tests/test_transport_failures.py",
     "link.http_to_https": "needs an HTTPS site whose HTTP URLs upgrade",
     # Baseline comparison happens after the scan, so a single-run fixture
     # cannot reach these. Covered by tests/test_content_changes.py.

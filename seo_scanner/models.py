@@ -88,6 +88,8 @@ class Page:
     og_description: str = ""
     og_image: str = ""
     og_url: str = ""
+    # False for non-HTML responses reached through a link (PDFs, images).
+    is_html: bool = True
     twitter_card: str = ""
     twitter_image: str = ""
     images: list[ImageReference] = field(default_factory=list)
@@ -149,6 +151,12 @@ class Edge:
 @dataclass
 class Coverage:
     pages_fetched: int = 0
+    # Of pages_fetched, how many were actually HTML. PDFs and images linked
+    # with <a href> are crawled as pages so their status and redirects are
+    # checked, but counting them as pages overstates site size — on
+    # taxibox.com.au they were the whole 751-vs-692 gap against the crawler.
+    html_pages_fetched: int = 0
+    documents_fetched: int = 0
     pages_queued: int = 0
     resources_discovered: int = 0
     resources_fetched: int = 0

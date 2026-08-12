@@ -65,6 +65,8 @@ class ScannerConfig:
     min_site_pages_for_link_metrics: int = 5
     max_soft_404_words: int = 100
     max_fetch_attempts: int = 3
+    # Off only for staging hosts with self-signed certificates.
+    verify_tls: bool = True
     retry_backoff_seconds: float = 0.5
     max_retry_after_seconds: float = 10.0
 
