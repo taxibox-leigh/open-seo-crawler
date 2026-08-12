@@ -67,6 +67,7 @@ class Page:
     crawl_depth: int | None = None
     truncated: bool = False
     redirect_hops: list[str] = field(default_factory=list)
+    redirect_statuses: list[int] = field(default_factory=list)
     canonical_url: str = ""
     canonical_urls: list[str] = field(default_factory=list)
     invalid_canonical_values: list[str] = field(default_factory=list)
@@ -86,6 +87,7 @@ class Page:
     og_title: str = ""
     og_description: str = ""
     og_image: str = ""
+    og_url: str = ""
     twitter_card: str = ""
     twitter_image: str = ""
     images: list[ImageReference] = field(default_factory=list)
@@ -120,6 +122,7 @@ class Resource:
     bytes: int = 0
     duration_ms: int = 0
     redirect_hops: list[str] = field(default_factory=list)
+    redirect_statuses: list[int] = field(default_factory=list)
     truncated: bool = False
     cache_control: str = ""
     content_encoding: str = ""
@@ -216,6 +219,7 @@ class ExternalLinkTarget:
     final_url: str = ""
     status: int | None = None
     redirect_hops: list[str] = field(default_factory=list)
+    redirect_statuses: list[int] = field(default_factory=list)
     referring_urls: list[str] = field(default_factory=list)
     error: str = ""
 

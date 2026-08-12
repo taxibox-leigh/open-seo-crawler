@@ -344,6 +344,61 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(nofollow[0].evidence["links"], ["https://example.com/a", "https://example.com/b"])
         self.assertFalse(nofollow[0].evidence["indexable"])
 
+    def test_sitemap_coverage_skips_pages_nobody_lists(self) -> None:
+        """The inverse sitemap rule, with the exclusions that keep it honest."""
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.sitemaps = [SitemapDocument(url="https://example.com/sitemap.xml", kind="urlset", status=200,
+                                           urls=["https://example.com/"])]
+        listed = Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1)
+        missing = Page("https://example.com/real-page", "https://example.com/real-page", 200, "text/html", 1, 1)
+        paginated = Page("https://example.com/blog/page/2/", "https://example.com/blog/page/2/", 200, "text/html", 1, 1)
+        parameterised = Page("https://example.com/booking?service=mss", "https://example.com/booking?service=mss", 200, "text/html", 1, 1)
+        document = Page("https://example.com/checklist.pdf", "https://example.com/checklist.pdf", 200, "text/html", 1, 1)
+        noindexed = Page("https://example.com/private", "https://example.com/private", 200, "text/html", 1, 1, robots_directives=["noindex"])
+        result.pages = [listed, missing, paginated, parameterised, document, noindexed]
+        Scanner()._add_sitemap_issues(result, set())
+        flagged = {issue.url for issue in result.issues if issue.rule_id == "sitemap.page_missing"}
+        self.assertEqual(flagged, {"https://example.com/real-page"})
+
+    def test_sitemap_coverage_is_silent_without_a_sitemap(self) -> None:
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [Page("https://example.com/a", "https://example.com/a", 200, "text/html", 1, 1)]
+        Scanner()._add_sitemap_issues(result, set())
+        self.assertNotIn("sitemap.page_missing", {issue.rule_id for issue in result.issues})
+
+    def test_og_url_mismatch_is_reported_against_the_canonical(self) -> None:
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [
+            Page("https://example.com/a", "https://example.com/a", 200, "text/html", 1, 1,
+                 title="A title of reasonable length", meta_description="A description of reasonable length for the page.",
+                 h1s=["Heading"], word_count=500, og_url="https://example.com/somewhere-else"),
+            # Trailing-slash-only difference must not be reported.
+            Page("https://example.com/b/", "https://example.com/b/", 200, "text/html", 1, 1,
+                 title="Another title of reasonable length", meta_description="Another description of reasonable length here.",
+                 h1s=["Heading"], word_count=500, og_url="https://example.com/b"),
+        ]
+        scanner = Scanner(ScannerConfig(min_title_chars=1, max_title_chars=80, min_meta_description_chars=1, max_meta_description_chars=200, min_content_words=3))
+        scanner._add_content_issues(result, set())
+        flagged = {issue.url for issue in result.issues if issue.rule_id == "social.og_url_canonical_mismatch"}
+        self.assertEqual(flagged, {"https://example.com/a"})
+
+    def test_pages_linking_to_redirects_are_counted_by_source_page(self) -> None:
+        """Ahrefs counts the pages that need editing; we counted destinations."""
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [
+            Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1,
+                 links=[LinkReference("https://example.com/old", "Old", False),
+                        LinkReference("https://example.com/fine", "Fine", False)]),
+            Page("https://example.com/old", "https://example.com/new", 200, "text/html", 1, 1,
+                 redirect_hops=["https://example.com/old", "https://example.com/new"]),
+            Page("https://example.com/fine", "https://example.com/fine", 200, "text/html", 1, 1),
+        ]
+        Scanner(ScannerConfig(min_site_pages_for_link_metrics=99))._add_architecture_issues(result, set())
+        sources = [issue for issue in result.issues if issue.rule_id == "link.redirect_source"]
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].url, "https://example.com/")
+        self.assertEqual(sources[0].evidence["links"], ["https://example.com/old"])
+
     def test_inlink_rules_count_dofollow_and_flag_mixed_rel(self) -> None:
         result = CrawlResult(start_url="https://example.com/", started_at="now")
         # /target gets one dofollow link and one nofollow link; /lonely gets one

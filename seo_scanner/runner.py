@@ -206,7 +206,8 @@ class Scanner:
             url=url, final_url=response.final_url, status=response.status, content_type=response.content_type,
             bytes=len(response.body), duration_ms=response.duration_ms, title=content.title,
             meta_description=content.meta_description, h1s=content.h1s, word_count=content.word_count,
-            truncated=response.truncated, redirect_hops=response.redirect_hops, canonical_url=signals.canonical_url,
+            truncated=response.truncated, redirect_hops=response.redirect_hops,
+            redirect_statuses=response.redirect_statuses, canonical_url=signals.canonical_url,
             canonical_urls=signals.canonical_urls, invalid_canonical_values=signals.invalid_canonical_values,
             robots_directives=signals.robots_directives, invalid_robots_directives=signals.invalid_robots_directives,
             robots_conflicts=signals.robots_conflicts, meta_refresh_url=signals.meta_refresh_url,
@@ -217,6 +218,7 @@ class Scanner:
             hreflang=signals.hreflang, declared_bytes=response.declared_bytes,
             viewport=content.viewport, og_title=content.og_title,
             og_description=content.og_description, og_image=content.og_image,
+            og_url=content.og_url,
             twitter_card=content.twitter_card, twitter_image=content.twitter_image,
             images=content.images, url_length=url_quality.length,
             query_parameter_count=url_quality.query_parameter_count,
@@ -259,6 +261,11 @@ class Scanner:
             result.issues.append(self._issue("link.redirect", "page", url, f"Internal link redirects to {response.final_url}", edges, {"hops": response.redirect_hops}))
         if len(response.redirect_hops) > 1:
             result.issues.append(self._issue("page.redirect_chain", "page", url, f"Page reaches {response.final_url} through {len(response.redirect_hops)} redirects", edges, {"hops": response.redirect_hops, "final_url": response.final_url}))
+        # A temporary redirect asks search engines to keep indexing the old URL,
+        # so a permanent move behind a 302 leaks its ranking signals.
+        temporary = [status for status in response.redirect_statuses if status in (302, 303, 307)]
+        if temporary:
+            result.issues.append(self._issue("page.temporary_redirect", "page", url, f"Page redirects to {response.final_url} with HTTP {temporary[0]}", edges, {"statuses": response.redirect_statuses, "final_url": response.final_url}))
         observed_size = max(response.declared_bytes or 0, len(response.body))
         if observed_size > self.config.max_page_size:
             result.issues.append(self._issue("page.oversized", "page", url, f"HTML response is {observed_size} bytes", edges, {"bytes": observed_size, "threshold": self.config.max_page_size}))
@@ -674,6 +681,24 @@ class Scanner:
             if page.canonical_url and page.canonical_url != url:
                 result.issues.append(self._issue("sitemap.url_noncanonical", "page", url, f"Sitemap URL canonicalizes to {page.canonical_url}", edges, {"canonical_url": page.canonical_url}))
 
+        # The inverse: indexable pages the sitemap never mentions. Only worth
+        # reporting when there is a sitemap to be absent from.
+        if not sitemap_urls:
+            return
+        listed = {_normalized_for_comparison(url) for url in sitemap_urls}
+        missing = [
+            page.url for page in result.pages
+            if _is_indexable_html(page)
+            and _normalized_for_comparison(page.url) not in listed
+            and _normalized_for_comparison(page.final_url) not in listed
+            and not _excluded_from_sitemap_expectation(page.url)
+        ]
+        for url in sorted(missing):
+            result.issues.append(self._issue(
+                "sitemap.page_missing", "page", url,
+                "Indexable page is not listed in any sitemap", edges,
+                {"sitemap_url_count": len(sitemap_urls)}))
+
     def _add_architecture_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
         navigation = [edge for edge in edges if edge.context == "a.href" and same_origin(result.start_url, edge.target_url)]
         adjacency: dict[str, set[str]] = {}
@@ -719,6 +744,39 @@ class Scanner:
                     "Successful sitemap page has no incoming internal HTML links", edges,
                     {"sitemap_url": url},
                 ))
+
+        # Links to redirects, counted by the page that has to be edited. The
+        # target-level link.redirect rule counts destinations, which understates
+        # the work: one redirected URL in a template touches every page.
+        redirecting = {
+            page.url for page in result.pages if page.redirect_hops
+        } | {
+            resource.url for resource in result.resources if resource.redirect_hops
+        }
+        for page in result.pages:
+            if not _is_html_page(page):
+                continue
+            offenders = sorted({
+                link.url for link in page.links
+                if link.url in redirecting and link.url != (page.final_url or page.url)
+            })
+            if offenders:
+                result.issues.append(self._issue(
+                    "link.redirect_source", "page", page.url,
+                    f"Page links to {len(offenders)} URLs that redirect", edges,
+                    {"links": offenders[:50], "count": len(offenders), "indexable": _is_indexable_html(page)}))
+            # Linking to the HTTP form of a URL that upgrades to HTTPS wastes a
+            # round trip on every visit and dilutes the link.
+            upgrades = sorted({
+                link.url for link in page.links
+                if link.url.startswith("http://")
+                and link.url.replace("http://", "https://", 1) in {p.final_url for p in result.pages}
+            })
+            if upgrades:
+                result.issues.append(self._issue(
+                    "link.http_to_https", "page", page.url,
+                    f"Page links to {len(upgrades)} HTTP URLs that redirect to HTTPS", edges,
+                    {"links": upgrades[:50], "indexable": _is_indexable_html(page)}))
 
         # Link equity flows from every followed link, including links on pages
         # that are themselves noindex, so the source set is all HTML pages.
@@ -831,6 +889,11 @@ class Scanner:
                 add("social.og_image_missing", "Page has no og:image value")
             if not page.twitter_card:
                 add("social.twitter_card_missing", "Page has no twitter:card value")
+            # og:url and the canonical disagreeing splits share signals between
+            # two URLs for the same page.
+            canonical_for_social = page.canonical_url or page.final_url or page.url
+            if page.og_url and _normalized_for_comparison(page.og_url) != _normalized_for_comparison(canonical_for_social):
+                add("social.og_url_canonical_mismatch", f"og:url is {page.og_url} but the canonical is {canonical_for_social}", {"og_url": page.og_url, "canonical_url": canonical_for_social})
         # Duplicate content only matters between pages eligible to rank, so
         # these stay on the indexable set.
         self._add_duplicate_content_issues(result, pages, edges, "title", "content.duplicate_title")
@@ -1067,6 +1130,30 @@ def _canonical_loops(canonicals: dict[str, str]) -> list[list[str]]:
         rotations = [tuple(loop[index:] + loop[:index]) for index in range(len(loop))]
         loops.add(min(rotations))
     return [list(loop) for loop in sorted(loops)]
+
+
+# Page shapes nobody lists in a sitemap on purpose. Without these the rule
+# reports paginated archives, parameter variants and documents as gaps —
+# against the audited site that was the difference between 138 findings and
+# the ~50 a commercial audit reports.
+_SITEMAP_EXEMPT_PATH = re.compile(
+    r"/page/\d+/?$"                     # paginated archives
+    r"|/(feed|amp|print)/?$"
+    r"|\.(pdf|docx?|xlsx?|pptx?|csv|zip|txt|xml)$",
+    re.I,
+)
+
+
+def _excluded_from_sitemap_expectation(url: str) -> bool:
+    split = urlsplit(url)
+    if split.query:
+        return True  # parameter variants canonicalize to their clean page
+    return bool(_SITEMAP_EXEMPT_PATH.search(split.path))
+
+
+def _normalized_for_comparison(url: str) -> str:
+    """Compare URLs without tripping over a trailing slash or scheme case."""
+    return (url or "").strip().rstrip("/").lower()
 
 
 def _rule_coverage(issues: list[Issue]) -> dict[str, int]:

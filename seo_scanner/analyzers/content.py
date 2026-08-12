@@ -21,6 +21,7 @@ class PageContent:
     og_title: str = ""
     og_description: str = ""
     og_image: str = ""
+    og_url: str = ""
     twitter_card: str = ""
     twitter_image: str = ""
     images: list[ImageReference] = field(default_factory=list)
@@ -41,6 +42,7 @@ def extract_page_content(html: str, base_url: str = "") -> PageContent:
     og_title = _meta(soup, "property", "og:title")
     og_description = _meta(soup, "property", "og:description")
     og_image = normalize_url(base_url, _meta(soup, "property", "og:image")) or ""
+    og_url = normalize_url(base_url, _meta(soup, "property", "og:url")) or ""
     twitter_card = _meta(soup, "name", "twitter:card")
     twitter_image = normalize_url(base_url, _meta(soup, "name", "twitter:image")) or ""
     images: list[ImageReference] = []
@@ -76,7 +78,7 @@ def extract_page_content(html: str, base_url: str = "") -> PageContent:
     normalized_text = " ".join(normalized_words)
     return PageContent(
         title, meta_description, h1s, len(words), viewport, og_title,
-        og_description, og_image, twitter_card, twitter_image, images,
+        og_description, og_image, og_url, twitter_card, twitter_image, images,
         hashlib.sha256(normalized_text.encode("utf-8")).hexdigest() if normalized_text else "",
         _simhash(normalized_words), links, heading_levels,
     )

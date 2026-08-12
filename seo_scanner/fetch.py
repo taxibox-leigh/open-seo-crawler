@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import requests
 
@@ -18,6 +18,9 @@ class FetchResponse:
     redirect_hops: list[str]
     truncated: bool
     headers: dict[str, str]
+    # Status of each hop, so a temporary redirect can be told from a permanent
+    # one. Same order as redirect_hops.
+    redirect_statuses: list[int] = field(default_factory=list)
 
 
 class Fetcher:
@@ -61,6 +64,7 @@ class Fetcher:
                 declared_bytes=declared,
                 duration_ms=round((time.monotonic() - started) * 1000),
                 redirect_hops=[item.url for item in response.history] + ([response.url] if response.history else []),
+                redirect_statuses=[item.status_code for item in response.history],
                 truncated=truncated,
                 headers={key.lower(): value for key, value in response.headers.items()},
             )
@@ -75,6 +79,7 @@ class Fetcher:
                 declared_bytes=int(declared) if declared and declared.isdigit() else None,
                 duration_ms=round((time.monotonic() - started) * 1000),
                 redirect_hops=[item.url for item in response.history] + ([response.url] if response.history else []),
+                redirect_statuses=[item.status_code for item in response.history],
                 truncated=False, headers={key.lower(): value for key, value in response.headers.items()},
             )
 

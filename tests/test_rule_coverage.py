@@ -225,7 +225,9 @@ class CoverageHandler(BaseHTTPRequestHandler):
             "/canonicalised": (200, "text/html", _page(
                 f"<h1>Canonicalised</h1><p>{LONG_TEXT}</p>",
                 f'<title>A page that canonicalises to another URL entirely</title>'
-                f'<link rel="canonical" href="{base}/">',
+                f'<link rel="canonical" href="{base}/">'
+                # og:url disagreeing with the canonical splits share signals.
+                f'<meta property="og:url" content="{base}/canonicalised">',
             ), {}),
             "/canonical-multiple": (200, "text/html", _page(
                 f"<h1>Multiple canonicals</h1><p>{LONG_TEXT}</p>",
@@ -371,6 +373,7 @@ UNFIXTURED = {
     # Need HTTPS, which the fixture server does not serve.
     "resource.mixed_content": "needs an HTTPS page referencing HTTP",
     "link.insecure_internal": "needs an HTTPS page linking to HTTP",
+    "link.http_to_https": "needs an HTTPS site whose HTTP URLs upgrade",
     # Need limits far below anything worth serving in a fixture.
     "crawl.limit_reached": "covered by the limits test",
     "robots.byte_limit": "needs a robots.txt past the byte limit",
