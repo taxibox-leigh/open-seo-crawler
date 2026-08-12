@@ -106,6 +106,8 @@ RULES = {
         Rule("architecture.deep_page", "Page exceeds the configured click depth", "warning", "Add useful internal links that bring important pages closer to the site entry point."),
         Rule("architecture.sitemap_orphan", "Sitemap page has no incoming internal links", "warning", "Link to the page from relevant indexable content, or remove it from the sitemap if it should not be discovered."),
         Rule("architecture.low_inlinks", "Page has few incoming internal links", "warning", "Add relevant internal links from useful pages to strengthen discovery and context."),
+        Rule("architecture.single_dofollow_inlink", "Page has exactly one incoming dofollow internal link", "warning", "Add further relevant internal links so discovery does not depend on a single link."),
+        Rule("architecture.mixed_rel_inlinks", "Page receives both nofollow and dofollow internal links", "info", "Use one consistent rel policy for internal links to the same destination."),
         Rule("architecture.no_outlinks", "Page has no outgoing internal links", "info", "Add relevant internal navigation where it helps users and crawlers continue through the site."),
         Rule("content.title_missing", "Page title is missing", "error", "Add a unique, descriptive title element."),
         Rule("content.title_too_long", "Page title exceeds the configured length", "warning", "Shorten the title while retaining its primary topic and intent."),

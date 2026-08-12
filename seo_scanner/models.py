@@ -137,6 +137,10 @@ class Edge:
     source_url: str
     target_url: str
     context: str
+    # rel tokens on the source anchor, space-joined and lowercased. Empty for
+    # non-anchor edges. Without this the exported graph cannot tell a followed
+    # link from a nofollowed one, which is what inlink-quality rules count.
+    rel: str = ""
 
 
 @dataclass

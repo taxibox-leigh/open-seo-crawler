@@ -327,6 +327,51 @@ class UnitTests(unittest.TestCase):
         # canonical.missing stays indexable-only: a noindex page needs no canonical.
         self.assertNotIn("canonical.missing", rules)
 
+    def test_internal_nofollow_is_reported_on_a_noindex_page(self) -> None:
+        """The only page on the audited site with internal nofollow links was
+        noindex, so the rule silently never fired."""
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [
+            Page("https://example.com/hub", "https://example.com/hub", 200, "text/html", 1, 1,
+                 robots_directives=["noindex", "nofollow"], word_count=500,
+                 links=[LinkReference("https://example.com/a", "A", True),
+                        LinkReference("https://example.com/b", "B", True)]),
+        ]
+        scanner = Scanner(ScannerConfig(min_title_chars=1, max_title_chars=80, min_meta_description_chars=1, max_meta_description_chars=200, min_content_words=3))
+        scanner._add_content_issues(result, set())
+        nofollow = [issue for issue in result.issues if issue.rule_id == "link.internal_nofollow"]
+        self.assertEqual(len(nofollow), 1)
+        self.assertEqual(nofollow[0].evidence["links"], ["https://example.com/a", "https://example.com/b"])
+        self.assertFalse(nofollow[0].evidence["indexable"])
+
+    def test_inlink_rules_count_dofollow_and_flag_mixed_rel(self) -> None:
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        # /target gets one dofollow link and one nofollow link; /lonely gets one
+        # dofollow link only. Sources include a noindex page, whose followed
+        # links still pass equity.
+        result.pages = [
+            Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1,
+                 links=[LinkReference("https://example.com/target", "Target", False),
+                        LinkReference("https://example.com/lonely", "Lonely", False)]),
+            Page("https://example.com/noindexed", "https://example.com/noindexed", 200, "text/html", 1, 1,
+                 robots_directives=["noindex"],
+                 links=[LinkReference("https://example.com/target", "Target", True)]),
+            Page("https://example.com/target", "https://example.com/target", 200, "text/html", 1, 1,
+                 links=[LinkReference("https://example.com/", "Home", False)]),
+            Page("https://example.com/lonely", "https://example.com/lonely", 200, "text/html", 1, 1,
+                 links=[LinkReference("https://example.com/", "Home", False)]),
+        ]
+        scanner = Scanner(ScannerConfig(min_site_pages_for_link_metrics=1, min_internal_inlinks=1))
+        scanner._add_architecture_issues(result, set())
+        by_url = {}
+        for issue in result.issues:
+            by_url.setdefault(issue.url, set()).add(issue.rule_id)
+        self.assertIn("architecture.single_dofollow_inlink", by_url["https://example.com/target"])
+        self.assertIn("architecture.mixed_rel_inlinks", by_url["https://example.com/target"])
+        self.assertIn("architecture.single_dofollow_inlink", by_url["https://example.com/lonely"])
+        # One dofollow source only — no mixed-rel finding.
+        self.assertNotIn("architecture.mixed_rel_inlinks", by_url["https://example.com/lonely"])
+
     def test_internal_link_and_page_semantics(self) -> None:
         content = extract_page_content(
             '<h1>Primary</h1><h3>Skipped</h3><a href="http://example.com/target" rel="nofollow"><img alt=""></a>',

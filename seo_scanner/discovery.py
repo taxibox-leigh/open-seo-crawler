@@ -40,7 +40,9 @@ def discover_html(page_url: str, html: str) -> tuple[list[str], list[DiscoveredR
         target = normalize_url(page_url, anchor.get("href", ""))
         if target:
             pages.append(target)
-            edges.add(Edge(page_url, target, "a.href"))
+            rel = anchor.get("rel") or []
+            rel_value = " ".join(str(token).lower() for token in rel) if isinstance(rel, list) else str(rel).lower()
+            edges.add(Edge(page_url, target, "a.href", rel_value.strip()))
     for tag in soup.select("img[src], input[type=image][src]"):
         add(tag.get("src"), "image", "img.src")
     for tag in soup.select("img[srcset], source[srcset]"):

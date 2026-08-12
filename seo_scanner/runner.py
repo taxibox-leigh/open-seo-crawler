@@ -711,25 +711,49 @@ class Scanner:
                     {"sitemap_url": url},
                 ))
 
-        indexable = [page for page in result.pages if _is_indexable_html(page)]
+        # Link equity flows from every followed link, including links on pages
+        # that are themselves noindex, so the source set is all HTML pages.
+        html_pages = [page for page in result.pages if _is_html_page(page)]
+        indexable = [page for page in html_pages if _is_indexable_html(page)]
         if len(indexable) >= self.config.min_site_pages_for_link_metrics:
-            incoming_sources: dict[str, set[str]] = {}
+            dofollow_sources: dict[str, set[str]] = {}
+            nofollow_sources: dict[str, set[str]] = {}
             outgoing_targets: dict[str, set[str]] = {}
-            for source_page in indexable:
+            for source_page in html_pages:
                 source_url = source_page.final_url or source_page.url
                 for link in source_page.links:
-                    if link.nofollow or not same_origin(result.start_url, link.url):
+                    if not same_origin(result.start_url, link.url):
                         continue
-                    incoming_sources.setdefault(link.url, set()).add(source_url)
+                    if link.nofollow:
+                        nofollow_sources.setdefault(link.url, set()).add(source_url)
+                        continue
+                    dofollow_sources.setdefault(link.url, set()).add(source_url)
                     outgoing_targets.setdefault(source_url, set()).add(link.url)
-            for page in indexable:
+            for page in html_pages:
+                page_indexable = _is_indexable_html(page)
                 aliases_for_page = {page.url, page.final_url}
-                incoming_count = len(set().union(*(incoming_sources.get(alias, set()) for alias in aliases_for_page)))
+                dofollow_in = set().union(*(dofollow_sources.get(alias, set()) for alias in aliases_for_page))
+                nofollow_in = set().union(*(nofollow_sources.get(alias, set()) for alias in aliases_for_page))
                 outgoing_count = len(set().union(*(outgoing_targets.get(alias, set()) for alias in aliases_for_page)))
-                if page.url != result.start_url and incoming_count < self.config.min_internal_inlinks:
-                    result.issues.append(self._issue("architecture.low_inlinks", "page", page.url, f"Page has {incoming_count} incoming internal links", edges, {"count": incoming_count, "threshold": self.config.min_internal_inlinks}))
-                if outgoing_count == 0:
-                    result.issues.append(self._issue("architecture.no_outlinks", "page", page.url, "Page has no outgoing internal HTML links", edges))
+
+                def add(rule_id: str, message: str, evidence: dict[str, object]) -> None:
+                    payload = dict(evidence)
+                    payload["indexable"] = page_indexable
+                    severity = None if page_indexable else _downgraded_severity(get_rule(rule_id).severity)
+                    result.issues.append(self._issue(rule_id, "page", page.url, message, edges, payload, severity))
+
+                if page.url != result.start_url and len(dofollow_in) < self.config.min_internal_inlinks:
+                    add("architecture.low_inlinks", f"Page has {len(dofollow_in)} incoming dofollow internal links", {"count": len(dofollow_in), "threshold": self.config.min_internal_inlinks})
+                # A page whose only inbound equity comes through one link is a
+                # single edit away from being orphaned.
+                if page.url != result.start_url and len(dofollow_in) == 1:
+                    add("architecture.single_dofollow_inlink", "Page has exactly one incoming dofollow internal link", {"source_urls": sorted(dofollow_in)})
+                # Mixed rel on links to the same target is nearly always an
+                # accident of templating rather than a deliberate policy.
+                if dofollow_in and nofollow_in:
+                    add("architecture.mixed_rel_inlinks", f"Page receives {len(dofollow_in)} dofollow and {len(nofollow_in)} nofollow internal links", {"dofollow_urls": sorted(dofollow_in)[:20], "nofollow_urls": sorted(nofollow_in)[:20], "dofollow_count": len(dofollow_in), "nofollow_count": len(nofollow_in)})
+                if outgoing_count == 0 and page_indexable:
+                    add("architecture.no_outlinks", "Page has no outgoing internal HTML links", {})
 
     def _add_content_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
         # Content defects exist on noindex and canonicalised pages too, and
