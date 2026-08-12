@@ -25,7 +25,7 @@ from .analyzers.link_header import parse_link_header
 from .discovery import DiscoveredResource, discover_css, discover_html
 from .fetch import Fetcher, FetchResponse
 from .models import Coverage, CrawlResult, Edge, ExternalLinkTarget, Issue, Page, RenderedPage, Resource, RobotsDocument, SitemapDocument
-from .rules import get_rule
+from .rules import RULES, get_rule
 from .scope import normalize_url, same_origin
 from .render import render_pages, select_render_urls
 
@@ -91,6 +91,7 @@ class Scanner:
         result.issues.extend(analyze_hreflang(result))
         result.coverage.pages_queued = len(state.page_queue)
         result.coverage.resources_discovered = len(state.pending_resources)
+        result.rule_coverage = _rule_coverage(result.issues)
         result.finished_at = _now()
         result.status = "partial" if not result.coverage.complete else "complete"
         return result
@@ -1058,6 +1059,14 @@ def _canonical_loops(canonicals: dict[str, str]) -> list[list[str]]:
         rotations = [tuple(loop[index:] + loop[:index]) for index in range(len(loop))]
         loops.add(min(rotations))
     return [list(loop) for loop in sorted(loops)]
+
+
+def _rule_coverage(issues: list[Issue]) -> dict[str, int]:
+    """Finding count for every defined rule, including the zeroes."""
+    counts = {rule_id: 0 for rule_id in RULES}
+    for issue in issues:
+        counts[issue.rule_id] = counts.get(issue.rule_id, 0) + 1
+    return counts
 
 
 _SEVERITY_ORDER = ("error", "warning", "info")

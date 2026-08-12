@@ -246,6 +246,10 @@ class CrawlResult:
     external_links: list[ExternalLinkTarget] = field(default_factory=list)
     rendered_pages: list[RenderedPage] = field(default_factory=list)
     comparison: BaselineComparison | None = None
+    # Every defined rule and how many findings it produced. A rule sitting at
+    # zero is either a clean site or a broken rule, and without this block
+    # there is no way to tell the two apart from the report alone.
+    rule_coverage: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
