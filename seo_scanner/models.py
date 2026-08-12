@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.24"
+SCHEMA_VERSION = "1.25"
 
 
 @dataclass(frozen=True)

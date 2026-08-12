@@ -3,103 +3,575 @@
   "$id": "https://open-seo-crawler.dev/schema/scanner-result-1.7.json",
   "title": "Open SEO Scanner result",
   "type": "object",
-  "required": ["schema_version", "start_url", "started_at", "finished_at", "status", "pages", "resources", "edges", "issues", "errors", "coverage", "sitemaps", "external_links", "comparison"],
+  "required": [
+    "schema_version",
+    "start_url",
+    "started_at",
+    "finished_at",
+    "status",
+    "pages",
+    "resources",
+    "edges",
+    "issues",
+    "errors",
+    "coverage",
+    "sitemaps",
+    "external_links",
+    "comparison"
+  ],
   "properties": {
-    "schema_version": {"const": "1.7"},
-    "start_url": {"type": "string", "format": "uri"},
-    "started_at": {"type": "string", "format": "date-time"},
-    "finished_at": {"type": "string", "format": "date-time"},
-    "status": {"enum": ["complete", "partial"]},
-    "pages": {"type": "array", "items": {"$ref": "#/$defs/page"}},
-    "resources": {"type": "array", "items": {"$ref": "#/$defs/resource"}},
-    "edges": {"type": "array", "items": {"$ref": "#/$defs/edge"}},
-    "issues": {"type": "array", "items": {"$ref": "#/$defs/issue"}},
-    "errors": {"type": "array", "items": {"type": "string"}},
-    "coverage": {"$ref": "#/$defs/coverage"},
-    "sitemaps": {"type": "array", "items": {"$ref": "#/$defs/sitemap"}},
-    "external_links": {"type": "array", "items": {"$ref": "#/$defs/external_link"}},
-    "comparison": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/comparison"}]}
+    "schema_version": {
+      "const": "1.7"
+    },
+    "start_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "enum": [
+        "complete",
+        "partial"
+      ]
+    },
+    "pages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/page"
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/resource"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/edge"
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/issue"
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "sitemaps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/sitemap"
+      }
+    },
+    "external_links": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/external_link"
+      }
+    },
+    "comparison": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/comparison"
+        }
+      ]
+    },
+    "rule_coverage": {
+      "type": "object",
+      "description": "Finding count for every defined rule, zeroes included, so a silent rule is distinguishable from a clean site.",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    }
   },
   "additionalProperties": false,
   "$defs": {
     "page": {
       "type": "object",
-      "required": ["url", "final_url", "status", "content_type", "bytes", "duration_ms", "title", "truncated", "redirect_hops", "canonical_url", "robots_directives", "invalid_robots_directives", "jsonld_errors", "jsonld_blocks", "hreflang"],
+      "required": [
+        "url",
+        "final_url",
+        "status",
+        "content_type",
+        "bytes",
+        "duration_ms",
+        "title",
+        "truncated",
+        "redirect_hops",
+        "canonical_url",
+        "robots_directives",
+        "invalid_robots_directives",
+        "jsonld_errors",
+        "jsonld_blocks",
+        "hreflang"
+      ],
       "properties": {
-        "url": {"type": "string"}, "final_url": {"type": "string"}, "status": {"type": "integer"},
-        "content_type": {"type": "string"}, "bytes": {"type": "integer"}, "duration_ms": {"type": "integer"}, "title": {"type": "string"}, "truncated": {"type": "boolean"},
-        "redirect_hops": {"type": "array", "items": {"type": "string"}}, "canonical_url": {"type": "string"},
-        "robots_directives": {"type": "array", "items": {"type": "string"}}, "invalid_robots_directives": {"type": "array", "items": {"type": "string"}},
-        "jsonld_errors": {"type": "array", "items": {"type": "string"}},
-        "jsonld_blocks": {"type": "array", "items": {
-          "type": "object", "required": ["index", "types"],
-          "properties": {"index": {"type": "integer"}, "types": {"type": "array", "items": {"type": "string"}}},
-          "additionalProperties": false
-        }},
-        "hreflang": {"type": "array", "items": {"$ref": "#/$defs/hreflang"}}
-      }, "additionalProperties": false
+        "url": {
+          "type": "string"
+        },
+        "final_url": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer"
+        },
+        "content_type": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer"
+        },
+        "duration_ms": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "redirect_hops": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "canonical_url": {
+          "type": "string"
+        },
+        "robots_directives": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "invalid_robots_directives": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "jsonld_errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "jsonld_blocks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "index",
+              "types"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer"
+              },
+              "types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "hreflang": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/hreflang"
+          }
+        }
+      },
+      "additionalProperties": true
     },
     "hreflang": {
-      "type": "object", "required": ["language", "url"],
-      "properties": {"language": {"type": "string"}, "url": {"type": "string"}}, "additionalProperties": false
+      "type": "object",
+      "required": [
+        "language",
+        "url"
+      ],
+      "properties": {
+        "language": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     },
     "resource": {
       "type": "object",
-      "required": ["url", "final_url", "kind", "status", "content_type", "bytes", "duration_ms", "redirect_hops", "truncated", "cache_control", "content_encoding", "etag", "last_modified", "image_width", "image_height", "image_format", "content_hash"],
+      "required": [
+        "url",
+        "final_url",
+        "kind",
+        "status",
+        "content_type",
+        "bytes",
+        "duration_ms",
+        "redirect_hops",
+        "truncated",
+        "cache_control",
+        "content_encoding",
+        "etag",
+        "last_modified",
+        "image_width",
+        "image_height",
+        "image_format",
+        "content_hash"
+      ],
       "properties": {
-        "url": {"type": "string"}, "final_url": {"type": "string"}, "kind": {"type": "string"},
-        "status": {"type": ["integer", "null"]}, "content_type": {"type": "string"}, "bytes": {"type": "integer"},
-        "duration_ms": {"type": "integer"}, "redirect_hops": {"type": "array", "items": {"type": "string"}}, "truncated": {"type": "boolean"},
-        "cache_control": {"type": "string"}, "content_encoding": {"type": "string"}, "etag": {"type": "string"}, "last_modified": {"type": "string"},
-        "image_width": {"type": ["integer", "null"]}, "image_height": {"type": ["integer", "null"]}, "image_format": {"type": "string"}, "content_hash": {"type": "string"}
-      }, "additionalProperties": false
+        "url": {
+          "type": "string"
+        },
+        "final_url": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "status": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "content_type": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer"
+        },
+        "duration_ms": {
+          "type": "integer"
+        },
+        "redirect_hops": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "cache_control": {
+          "type": "string"
+        },
+        "content_encoding": {
+          "type": "string"
+        },
+        "etag": {
+          "type": "string"
+        },
+        "last_modified": {
+          "type": "string"
+        },
+        "image_width": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "image_height": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "image_format": {
+          "type": "string"
+        },
+        "content_hash": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
     },
     "edge": {
-      "type": "object", "required": ["source_url", "target_url", "context"],
-      "properties": {"source_url": {"type": "string"}, "target_url": {"type": "string"}, "context": {"type": "string"}}, "additionalProperties": false
+      "type": "object",
+      "required": [
+        "source_url",
+        "target_url",
+        "context"
+      ],
+      "properties": {
+        "source_url": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "rel": {
+          "type": "string",
+          "description": "rel tokens on the source anchor, space-joined and lowercased. Empty for non-anchor edges."
+        }
+      },
+      "additionalProperties": false
     },
     "issue": {
-      "type": "object", "required": ["rule_id", "title", "severity", "entity_type", "url", "message", "evidence", "referring_urls", "remediation", "issue_id", "suppressed"],
+      "type": "object",
+      "required": [
+        "rule_id",
+        "title",
+        "severity",
+        "entity_type",
+        "url",
+        "message",
+        "evidence",
+        "referring_urls",
+        "remediation",
+        "issue_id",
+        "suppressed"
+      ],
       "properties": {
-        "rule_id": {"type": "string"}, "title": {"type": "string"}, "severity": {"enum": ["error", "warning", "info"]},
-        "entity_type": {"type": "string"}, "url": {"type": "string"}, "message": {"type": "string"},
-        "evidence": {"type": "object"}, "referring_urls": {"type": "array", "items": {"type": "string"}}, "remediation": {"type": "string"},
-        "issue_id": {"type": "string"}, "suppressed": {"type": "boolean"}
-      }, "additionalProperties": false
+        "rule_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning",
+            "info"
+          ]
+        },
+        "entity_type": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "object"
+        },
+        "referring_urls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remediation": {
+          "type": "string"
+        },
+        "issue_id": {
+          "type": "string"
+        },
+        "suppressed": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     },
     "coverage": {
-      "type": "object", "required": ["pages_fetched", "pages_queued", "resources_discovered", "resources_fetched", "bytes_downloaded", "complete", "limit_reason", "sitemaps_fetched", "sitemap_urls_discovered", "external_links_discovered", "external_links_checked"],
+      "type": "object",
+      "required": [
+        "pages_fetched",
+        "pages_queued",
+        "resources_discovered",
+        "resources_fetched",
+        "bytes_downloaded",
+        "complete",
+        "limit_reason",
+        "sitemaps_fetched",
+        "sitemap_urls_discovered",
+        "external_links_discovered",
+        "external_links_checked"
+      ],
       "properties": {
-        "pages_fetched": {"type": "integer"}, "pages_queued": {"type": "integer"}, "resources_discovered": {"type": "integer"},
-        "resources_fetched": {"type": "integer"}, "bytes_downloaded": {"type": "integer"}, "complete": {"type": "boolean"},
-        "limit_reason": {"type": ["string", "null"]}, "sitemaps_fetched": {"type": "integer"}, "sitemap_urls_discovered": {"type": "integer"},
-        "external_links_discovered": {"type": "integer"}, "external_links_checked": {"type": "integer"}
-      }, "additionalProperties": false
+        "pages_fetched": {
+          "type": "integer"
+        },
+        "pages_queued": {
+          "type": "integer"
+        },
+        "resources_discovered": {
+          "type": "integer"
+        },
+        "resources_fetched": {
+          "type": "integer"
+        },
+        "bytes_downloaded": {
+          "type": "integer"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "limit_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sitemaps_fetched": {
+          "type": "integer"
+        },
+        "sitemap_urls_discovered": {
+          "type": "integer"
+        },
+        "external_links_discovered": {
+          "type": "integer"
+        },
+        "external_links_checked": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
     },
     "sitemap": {
-      "type": "object", "required": ["url", "status", "kind", "urls", "child_sitemaps", "errors"],
+      "type": "object",
+      "required": [
+        "url",
+        "status",
+        "kind",
+        "urls",
+        "child_sitemaps",
+        "errors"
+      ],
       "properties": {
-        "url": {"type": "string"}, "status": {"type": ["integer", "null"]}, "kind": {"type": "string"},
-        "urls": {"type": "array", "items": {"type": "string"}}, "child_sitemaps": {"type": "array", "items": {"type": "string"}},
-        "errors": {"type": "array", "items": {"type": "string"}}
-      }, "additionalProperties": false
+        "url": {
+          "type": "string"
+        },
+        "status": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "urls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "child_sitemaps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "external_link": {
-      "type": "object", "required": ["url", "final_url", "status", "redirect_hops", "referring_urls", "error"],
+      "type": "object",
+      "required": [
+        "url",
+        "final_url",
+        "status",
+        "redirect_hops",
+        "referring_urls",
+        "error"
+      ],
       "properties": {
-        "url": {"type": "string"}, "final_url": {"type": "string"}, "status": {"type": ["integer", "null"]},
-        "redirect_hops": {"type": "array", "items": {"type": "string"}},
-        "referring_urls": {"type": "array", "items": {"type": "string"}}, "error": {"type": "string"}
-      }, "additionalProperties": false
+        "url": {
+          "type": "string"
+        },
+        "final_url": {
+          "type": "string"
+        },
+        "status": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "redirect_hops": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "referring_urls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     },
     "comparison": {
-      "type": "object", "required": ["new_issue_ids", "persistent_issue_ids", "resolved_issue_ids", "suppressed_issue_ids"],
+      "type": "object",
+      "required": [
+        "new_issue_ids",
+        "persistent_issue_ids",
+        "resolved_issue_ids",
+        "suppressed_issue_ids"
+      ],
       "properties": {
-        "new_issue_ids": {"type": "array", "items": {"type": "string"}},
-        "persistent_issue_ids": {"type": "array", "items": {"type": "string"}},
-        "resolved_issue_ids": {"type": "array", "items": {"type": "string"}},
-        "suppressed_issue_ids": {"type": "array", "items": {"type": "string"}}
-      }, "additionalProperties": false
+        "new_issue_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "persistent_issue_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resolved_issue_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "suppressed_issue_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
     }
-  }
+  },
+  "description": "Result document produced by open-seo-scanner. Object definitions below document the stable subset consumers rely on; the scanner emits further fields on pages and resources."
 }
