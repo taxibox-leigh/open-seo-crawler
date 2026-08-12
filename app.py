@@ -1227,7 +1227,134 @@ def _filename_looks_decorative(src):
     return bool(_DECORATIVE_FILENAME_RE.search(fname))
 
 
-def _parse_no_js_subset(html, base_url):
+def _extract_body_text(raw_html):
+    """Visible content text for word counting and duplicate detection.
+
+    Strips scripts, chrome and nav-like blocks, then prefers the main content
+    container so boilerplate does not inflate the count. Shared by the main
+    crawl pass and the pre-JS comparison pass — if the two ever compute this
+    differently, every page reports a phantom word_count difference.
+    """
+    soup_body = BeautifulSoup(raw_html or '', 'html.parser')
+    for tag in soup_body(['script', 'style', 'nav', 'footer', 'header', 'iframe', 'noscript', 'form', 'svg']):
+        tag.decompose()
+    try:
+        nav_like_re = _re.compile(
+            r'(main[-_]?menu|primary[-_]?menu|site[-_]?nav|header[-_]?nav|'
+            r'mega[-_]?menu|nav[-_]?menu|top[-_]?menu|mobile[-_]?menu|sub[-_]?menu|'
+            r'breadcrumb|footer[-_]?menu|site[-_]?header|site[-_]?footer|'
+            r'menu[-_]?wrap|navbar|navigation|'
+            r'elementor-nav-menu|elementor-menu|elementor-widget-nav-menu|'
+            r'et_pb_menu|divi-menu|menu-item-has-children|\bmenu\b|'
+            r'offcanvas|hamburger|dropdown-menu)',
+            _re.I,
+        )
+        role_nav_re = _re.compile(r'^(navigation|menubar|menu)$', _re.I)
+        for el in list(soup_body.find_all(['div', 'section', 'ul', 'aside'])):
+            if not el.parent:
+                continue
+            classes = ' '.join(el.get('class') or [])
+            ident = el.get('id') or ''
+            role = el.get('role') or ''
+            aria = el.get('aria-label') or ''
+            if (nav_like_re.search(classes) or nav_like_re.search(ident)
+                    or role_nav_re.match(role) or nav_like_re.search(aria)):
+                el.decompose()
+    except Exception:
+        pass
+
+    # Pick the first <article> that ISN'T a post-grid / related-posts card.
+    # Elementor and many blog themes render recent/related posts as
+    # <article class="elementor-post elementor-grid-item ...">; grabbing the
+    # first of those captures the same boilerplate snippet on every page, so
+    # every post looks like an exact body duplicate. Skip those cards.
+    def _real_article(sb):
+        for art in sb.find_all('article'):
+            cls = ' '.join(art.get('class') or [])
+            if _re.search(r'elementor-post|elementor-grid-item|elementor-posts|post-grid|related|recent[-_]?post|widget', cls, _re.I):
+                continue
+            return art
+        return None
+
+    main_container = (
+        soup_body.find('main')
+        or soup_body.find(attrs={'role': 'main'})
+        # Elementor Theme Builder renders the real post body in this widget
+        # and ships no <main>/<article> wrapper, so it must come before the
+        # generic <article> fallback (which would otherwise hit a grid card).
+        or soup_body.find(attrs={'class': _re.compile(r'elementor-widget-theme-post-content', _re.I)})
+        or _real_article(soup_body)
+        or soup_body.find(id=_re.compile(r'^(main|content|primary|page-content)$', _re.I))
+        or soup_body.find(attrs={'class': _re.compile(r'(^|\s)(main-content|page-content|entry-content|post-content|article-content|site-main)(\s|$)', _re.I)})
+    )
+    text_root = main_container if main_container else soup_body
+    return text_root.get_text(separator=' ', strip=True)
+
+
+def _extract_schema_types(soup):
+    """schema.org types from JSON-LD and microdata.
+
+    Must run before scripts are stripped from the soup — JSON-LD lives in a
+    <script> tag, so decomposing first silently yields an empty list.
+    """
+    types = []
+
+    def _push(val):
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, str):
+                    types.append(item)
+        elif isinstance(val, str):
+            types.append(val)
+
+    for script in soup.find_all('script', attrs={'type': 'application/ld+json'}):
+        try:
+            ld = json.loads(script.string or '')
+        except Exception:
+            continue
+        if isinstance(ld, dict):
+            if '@type' in ld:
+                _push(ld['@type'])
+            if '@graph' in ld and isinstance(ld['@graph'], list):
+                for item in ld['@graph']:
+                    if isinstance(item, dict) and '@type' in item:
+                        _push(item['@type'])
+        elif isinstance(ld, list):
+            for item in ld:
+                if isinstance(item, dict) and '@type' in item:
+                    _push(item['@type'])
+    for el in soup.find_all(attrs={'itemtype': True})[:25]:
+        it = (el.get('itemtype') or '').rstrip('/').rsplit('/', 1)[-1].strip()
+        if it and it not in types:
+            types.append(it)
+    return types
+
+
+def _count_links(soup, base_url, domain):
+    """(unique internal links, external link occurrences).
+
+    Mirrors the main crawl pass: internal links are deduplicated by normalized
+    URL, external links are counted per occurrence.
+    """
+    internal = set()
+    external = 0
+    for anchor in soup.find_all('a', href=True):
+        href = (anchor.get('href') or '').strip()
+        if not href or href.startswith(('#', 'javascript:', 'mailto:', 'tel:')):
+            continue
+        try:
+            resolved = urljoin(base_url, href)
+            link_domain = urlparse(resolved).netloc.lower().replace('www.', '')
+        except Exception:
+            continue
+        if not link_domain or link_domain == domain:
+            internal.add(_normalize_crawl_url(resolved))
+        else:
+            external += 1
+    return len(internal), external
+
+
+def _parse_no_js_subset(html, base_url, domain=None):
     """Parse a subset of SEO-critical fields from raw HTML — used for the
     JS-vs-non-JS comparison so we can show what content is missing when JS
     isn't executed. Same parsers/idioms as the main pass in `_crawl_page`,
@@ -1255,50 +1382,20 @@ def _parse_no_js_subset(html, base_url):
         h1s = [h for h in h1s if h]
         out['h1'] = h1s[0] if h1s else ''
         out['h1_count'] = len(h1s)
+        # Schema first: extracting it needs the <script> tags intact.
+        out['schema_types'] = _extract_schema_types(soup)
+        body_text = _extract_body_text(html)
+        out['word_count'] = len(body_text.split()) if body_text else 0
+        # Same domain the main pass classifies links against, so internal and
+        # external counts are comparable between the two.
+        if domain is None:
+            try:
+                domain = (urlparse(base_url).netloc or '').lower().replace('www.', '')
+            except Exception:
+                domain = ''
+        out['internal_links_count'], out['external_links_count'] = _count_links(soup, base_url, domain)
         for s in soup(['script', 'style', 'noscript']):
             s.decompose()
-        body_text = ' '.join(soup.get_text(separator=' ', strip=True).split())
-        out['word_count'] = len(body_text.split()) if body_text else 0
-        types = []
-        def _push(v):
-            if isinstance(v, list):
-                for x in v:
-                    if isinstance(x, str): types.append(x)
-            elif isinstance(v, str):
-                types.append(v)
-        for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
-            try:
-                ld = json.loads(sc.string or '')
-                if isinstance(ld, dict):
-                    if '@type' in ld: _push(ld['@type'])
-                    if '@graph' in ld:
-                        for it in ld['@graph']:
-                            if isinstance(it, dict) and '@type' in it:
-                                _push(it['@type'])
-                elif isinstance(ld, list):
-                    for it in ld:
-                        if isinstance(it, dict) and '@type' in it:
-                            _push(it['@type'])
-            except Exception:
-                pass
-        out['schema_types'] = types
-        try:
-            host = (urlparse(base_url).netloc or '').lower().replace('www.', '')
-        except Exception:
-            host = ''
-        for a in soup.find_all('a', href=True):
-            href = a.get('href', '').strip()
-            if not href or href.startswith(('#', 'javascript:', 'mailto:', 'tel:')):
-                continue
-            try:
-                abs_url = urljoin(base_url, href)
-                link_host = (urlparse(abs_url).netloc or '').lower().replace('www.', '')
-            except Exception:
-                continue
-            if link_host == host or not link_host:
-                out['internal_links_count'] += 1
-            else:
-                out['external_links_count'] += 1
         imgs = soup.find_all('img')
         out['images_count'] = len(imgs)
         out['images_no_alt'] = sum(1 for i in imgs if not (i.get('alt') or '').strip())
@@ -1763,36 +1860,10 @@ def _crawl_page(url, session, domain, renderer=None, ignore_noindex=False, captu
         # ("@type": ["Service", "LocalBusiness"]). Flatten to individual
         # strings so the client receives list[str] and rendering doesn't
         # choke on a nested array element.
-        def _push_type(val):
-            if isinstance(val, list):
-                for v in val:
-                    if isinstance(v, str):
-                        result['schema_types'].append(v)
-            elif isinstance(val, str):
-                result['schema_types'].append(val)
-        for script in soup.find_all('script', attrs={'type': 'application/ld+json'}):
-            try:
-                ld = json.loads(script.string or '')
-                if isinstance(ld, dict):
-                    if '@type' in ld:
-                        _push_type(ld['@type'])
-                    if '@graph' in ld:
-                        for item in ld['@graph']:
-                            if isinstance(item, dict) and '@type' in item:
-                                _push_type(item['@type'])
-                elif isinstance(ld, list):
-                    for item in ld:
-                        if isinstance(item, dict) and '@type' in item:
-                            _push_type(item['@type'])
-            except Exception:
-                pass
-        # Microdata (itemtype="https://schema.org/Product") — older themes
-        # mark up with microdata instead of JSON-LD; without this they read
-        # as "no structured data" when they plainly have some.
-        for el in soup.find_all(attrs={'itemtype': True})[:25]:
-            it = (el.get('itemtype') or '').rstrip('/').rsplit('/', 1)[-1].strip()
-            if it and it not in result['schema_types']:
-                result['schema_types'].append(it)
+        # Includes microdata (itemtype="https://schema.org/Product") — older
+        # themes mark up with microdata instead of JSON-LD; without it they
+        # read as "no structured data" when they plainly have some.
+        result['schema_types'] = _extract_schema_types(soup)
 
         # Open Graph and Twitter Card tags
         for m in soup.find_all('meta'):
@@ -1846,59 +1917,8 @@ def _crawl_page(url, session, domain, renderer=None, ignore_noindex=False, captu
         # <div class="elementor-nav-menu">). Also prefer <main>/<article>
         # content when present so the body word count reflects actual content,
         # not menu/footer boilerplate (otherwise thin-content detection misfires).
-        soup_body = BeautifulSoup(raw_html, 'html.parser')
-        for tag in soup_body(['script', 'style', 'nav', 'footer', 'header', 'iframe', 'noscript', 'form', 'svg']):
-            tag.decompose()
-        try:
-            nav_like_re = _re.compile(
-                r'(main[-_]?menu|primary[-_]?menu|site[-_]?nav|header[-_]?nav|'
-                r'mega[-_]?menu|nav[-_]?menu|top[-_]?menu|mobile[-_]?menu|sub[-_]?menu|'
-                r'breadcrumb|footer[-_]?menu|site[-_]?header|site[-_]?footer|'
-                r'menu[-_]?wrap|navbar|navigation|'
-                r'elementor-nav-menu|elementor-menu|elementor-widget-nav-menu|'
-                r'et_pb_menu|divi-menu|menu-item-has-children|\bmenu\b|'
-                r'offcanvas|hamburger|dropdown-menu)',
-                _re.I,
-            )
-            role_nav_re = _re.compile(r'^(navigation|menubar|menu)$', _re.I)
-            for el in list(soup_body.find_all(['div', 'section', 'ul', 'aside'])):
-                if not el.parent:
-                    continue
-                classes = ' '.join(el.get('class') or [])
-                ident = el.get('id') or ''
-                role = el.get('role') or ''
-                aria = el.get('aria-label') or ''
-                if (nav_like_re.search(classes) or nav_like_re.search(ident)
-                        or role_nav_re.match(role) or nav_like_re.search(aria)):
-                    el.decompose()
-        except Exception:
-            pass
-        # Pick the first <article> that ISN'T a post-grid / related-posts card.
-        # Elementor and many blog themes render recent/related posts as
-        # <article class="elementor-post elementor-grid-item ...">; grabbing the
-        # first of those captures the same boilerplate snippet on every page, so
-        # every post looks like an exact body duplicate. Skip those cards.
-        def _real_article(sb):
-            for art in sb.find_all('article'):
-                cls = ' '.join(art.get('class') or [])
-                if _re.search(r'elementor-post|elementor-grid-item|elementor-posts|post-grid|related|recent[-_]?post|widget', cls, _re.I):
-                    continue
-                return art
-            return None
-
-        main_container = (
-            soup_body.find('main')
-            or soup_body.find(attrs={'role': 'main'})
-            # Elementor Theme Builder renders the real post body in this widget
-            # and ships no <main>/<article> wrapper, so it must come before the
-            # generic <article> fallback (which would otherwise hit a grid card).
-            or soup_body.find(attrs={'class': _re.compile(r'elementor-widget-theme-post-content', _re.I)})
-            or _real_article(soup_body)
-            or soup_body.find(id=_re.compile(r'^(main|content|primary|page-content)$', _re.I))
-            or soup_body.find(attrs={'class': _re.compile(r'(^|\s)(main-content|page-content|entry-content|post-content|article-content|site-main)(\s|$)', _re.I)})
-        )
-        text_root = main_container if main_container else soup_body
-        body_text = text_root.get_text(separator=' ', strip=True)
+        # Shared with the pre-JS pass so the two are always comparable.
+        body_text = _extract_body_text(raw_html)
         result['word_count'] = len(body_text.split()) if body_text else 0
         # Cap body text at 30k chars — sufficient for shingle-based near-dup
         # detection on any reasonable page; keeps the SSE payload bounded.
@@ -2356,7 +2376,7 @@ def _crawl_page(url, session, domain, renderer=None, ignore_noindex=False, captu
         if capture_no_js and result.get('js_rendered') and pre_js_html:
             try:
                 base = result.get('url') or url
-                nojs = _parse_no_js_subset(pre_js_html, base)
+                nojs = _parse_no_js_subset(pre_js_html, base, domain)
                 result['non_js'] = nojs
                 result['js_diff'] = _compute_js_diff(result, nojs)
                 sev = result['js_diff'].get('severity')

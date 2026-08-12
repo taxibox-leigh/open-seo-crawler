@@ -37,9 +37,33 @@ FIXTURE_HTML = """<!doctype html>
 """
 
 
+# Server-rendered, no JavaScript at all. Rendering this must change nothing,
+# so the JS-vs-source comparison has to report no difference.
+STATIC_HTML = """<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Static page</title>
+<meta name="description" content="A static description.">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"LocalBusiness","name":"Example"}
+</script>
+</head>
+<body>
+<nav class="main-menu"><a href="/">Home</a><a href="/about">About</a></nav>
+<main>
+<h1>Static heading</h1>
+<p>%s</p>
+<a href="/about">About us</a><a href="/about">About us again</a>
+<a href="https://external.example.com/">External</a>
+</main>
+<footer class="site-footer"><a href="/privacy">Privacy</a></footer>
+</body></html>
+""" % ("Real server-rendered body copy. " * 40)
+
+
 class FixtureHandler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 - stdlib naming
-        body = FIXTURE_HTML.encode("utf-8")
+        source = STATIC_HTML if self.path.startswith("/static") else FIXTURE_HTML
+        body = source.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -65,7 +89,8 @@ class RenderServiceTest(unittest.TestCase):
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
-        cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}/"
+        cls.netloc = f"127.0.0.1:{cls.server.server_address[1]}"
+        cls.base = f"http://{cls.netloc}/"
 
     @classmethod
     def tearDownClass(cls):
@@ -107,6 +132,39 @@ class RenderServiceTest(unittest.TestCase):
         self.assertEqual(page["h1"], "rendered heading")
         # And the no-JS comparison must see the pre-render version.
         self.assertEqual(page["non_js"]["title"], "raw title")
+
+    def test_static_page_reports_no_js_difference(self):
+        """A page with no JS must diff to 'none'.
+
+        The rendered pass and the pre-JS pass computed word count, schema
+        types and internal links three different ways, so every page reported
+        a critical difference regardless of its JavaScript. That stayed
+        invisible for as long as rendering itself was broken.
+        """
+        renderer = RenderService(user_agent="test-agent")
+        self.assertTrue(renderer.start(), msg=renderer.error)
+        session = requests.Session()
+        try:
+            # The crawler classifies links against the domain it was given,
+            # and netloc carries the port on a test server.
+            page = _crawl_page(
+                self.base + "static", session, self.netloc,
+                renderer=renderer, capture_no_js=True,
+            )
+        finally:
+            session.close()
+            renderer.stop()
+
+        self.assertTrue(page["js_rendered"], msg=page.get("render_errors"))
+        self.assertEqual(page["js_diff"]["fields"], [])
+        self.assertEqual(page["js_diff"]["severity"], "none")
+        # The three fields that used to be computed differently now agree.
+        self.assertEqual(page["word_count"], page["non_js"]["word_count"])
+        self.assertEqual(sorted(page["schema_types"]), sorted(page["non_js"]["schema_types"]))
+        self.assertEqual(page["internal_links"], page["non_js"]["internal_links_count"])
+        # JSON-LD must survive: it lives in a <script> the pre-JS pass used to
+        # strip before reading it.
+        self.assertIn("LocalBusiness", page["non_js"]["schema_types"])
 
     def test_unavailable_browser_reports_instead_of_raising(self):
         renderer = RenderService(user_agent="test-agent")
