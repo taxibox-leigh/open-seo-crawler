@@ -328,6 +328,14 @@ class Scanner:
         unresolved = [item for item in signals.jsonld_integrity_warnings if "no definition" in item]
         if unresolved:
             result.issues.append(self._issue("structured_data.unresolved_fragment", "page", url, "JSON-LD references undefined local identifiers", edges, {"warnings": unresolved}))
+        if signals.schema_missing_required:
+            types = sorted({item["type"] for item in signals.schema_missing_required})
+            result.issues.append(self._issue("structured_data.missing_required_property", "page", url, f"Structured data omits {len(signals.schema_missing_required)} required properties on {', '.join(types)}", edges, {"findings": signals.schema_missing_required}))
+        if signals.schema_invalid_values:
+            result.issues.append(self._issue("structured_data.invalid_property_value", "page", url, f"Structured data has {len(signals.schema_invalid_values)} property values in the wrong format", edges, {"findings": signals.schema_invalid_values}))
+        if signals.schema_missing_recommended:
+            types = sorted({item["type"] for item in signals.schema_missing_recommended})
+            result.issues.append(self._issue("structured_data.missing_recommended_property", "page", url, f"Structured data omits {len(signals.schema_missing_recommended)} recommended properties on {', '.join(types)}", edges, {"findings": signals.schema_missing_recommended}))
 
     def _add_url_quality_issues(self, result: CrawlResult, url: str, quality: UrlQuality, edges: set[Edge]) -> None:
         if quality.length > self.config.max_url_chars:

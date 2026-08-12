@@ -148,7 +148,11 @@ class CoverageHandler(BaseHTTPRequestHandler):
             "/bad-shapes": (200, "text/html", _page(
                 f"<h1>Bad shapes</h1><p>{LONG_TEXT}</p>",
                 "<title>A page whose JSON-LD uses invalid value shapes</title>"
-                '<script type="application/ld+json">{"@context":42,"@type":["Thing",7],"@id":{"not":"a string"}}</script>',
+                '<script type="application/ld+json">{"@context":42,"@type":["Thing",7],"@id":{"not":"a string"}}</script>'
+                # Required property present but the wrong shape, plus a date
+                # and a URL that are not one.
+                '<script type="application/ld+json">{"@context":"https://schema.org","@type":"Article",'
+                '"headline":"A headline","author":"Someone","image":"not-a-url","datePublished":"last Tuesday"}</script>',
             ), {}),
             "/broken-resources": (200, "text/html", _page(
                 f'<h1>Broken resources</h1><p>{LONG_TEXT}</p>'
