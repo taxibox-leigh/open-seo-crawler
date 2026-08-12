@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 
 from ..models import ImageReference, LinkReference
 from ..scope import normalize_url
+from .alt_text import classify_alt
 
 
 @dataclass
@@ -53,6 +54,7 @@ def extract_page_content(html: str, base_url: str = "") -> PageContent:
                 str(image.get("alt", "")) if image.has_attr("alt") else None,
                 _positive_int(image.get("width")), _positive_int(image.get("height")),
                 bool(image.get("srcset") or image.get("data-srcset") or (picture and picture.select_one("source[srcset], source[data-srcset]"))),
+                classify_alt(image, image_url),
             ))
     links: list[LinkReference] = []
     for anchor in soup.select("a[href]"):

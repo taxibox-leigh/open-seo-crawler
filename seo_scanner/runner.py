@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import requests
 from .config import ScannerConfig
 from .analyzers.image import inspect_image
+from .analyzers.alt_text import ALT_EMPTY_CONTENT
 from .analyzers.content import PageContent, extract_page_content
 from .analyzers.directives import PageSignals, extract_page_signals
 from .analyzers.sitemap import parse_sitemap, sitemap_locations_from_robots
@@ -774,6 +775,9 @@ class Scanner:
             missing_alt = sorted({image.url for image in page.images if image.alt is None})
             if missing_alt:
                 add("content.image_alt_missing", f"Page contains {len(missing_alt)} images without alt attributes", {"images": missing_alt})
+            empty_alt = sorted({image.url for image in page.images if image.alt_state == ALT_EMPTY_CONTENT})
+            if empty_alt:
+                add("content.image_alt_empty", f"Page contains {len(empty_alt)} content images with an empty alt attribute", {"images": empty_alt})
             empty_links = sorted({link.url for link in page.links if not link.text and _same_hostname(page.final_url or page.url, link.url)})
             if empty_links:
                 add("link.text_missing", f"Page contains {len(empty_links)} internal links without descriptive text", {"links": empty_links})

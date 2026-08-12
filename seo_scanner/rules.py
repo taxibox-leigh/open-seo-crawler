@@ -134,6 +134,7 @@ RULES = {
         Rule("page.soft_404", "Successful response appears to be a not-found page", "error", "Return an appropriate 404 or 410 status for missing content, or restore the intended page."),
         Rule("content.viewport_missing", "Page has no viewport declaration", "warning", "Add a responsive viewport meta tag for mobile rendering."),
         Rule("content.image_alt_missing", "Page images are missing alt attributes", "warning", "Add descriptive alt text, or an explicit empty alt attribute for decorative images."),
+        Rule("content.image_alt_empty", "Content images have an empty alt attribute", "warning", "Describe the image in its alt attribute, or confirm it is decorative and leave the empty alt in place."),
         Rule("document.head_missing", "HTML document has no explicit head element", "warning", "Add one explicit head element containing document metadata."),
         Rule("document.body_missing", "HTML document has no explicit body element", "warning", "Add one explicit body element containing the page content."),
         Rule("document.multiple_head", "HTML document has multiple head elements", "error", "Keep exactly one head element in the document."),

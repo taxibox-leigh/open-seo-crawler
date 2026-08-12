@@ -250,6 +250,53 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(rules.count("content.thin"), 2)
         self.assertEqual(rules.count("content.image_alt_missing"), 1)
 
+    def test_empty_alt_is_split_into_decorative_and_content(self) -> None:
+        """alt="" is correct markup for decoration and a defect on content imagery."""
+        html = (
+            '<img src="/photo-of-the-team.jpg" alt="">'                      # content: flag
+            '<img src="/icon-arrow.svg" alt="">'                             # decorative filename
+            '<img src="/shape.png" alt="" role="presentation">'              # explicit role
+            '<img src="/thing.jpg" alt="" aria-hidden="true">'               # explicitly hidden
+            '<a href="/x" aria-label="Read the guide"><img src="/cover.jpg" alt=""></a>'  # parent named
+            '<img src="https://www.googletagmanager.com/beacon.gif" alt="">'  # third party
+            '<img src="/described.jpg" alt="A team member packing a box">'    # fine
+            '<img src="/forgotten.jpg">'                                      # missing, not empty
+        )
+        content = extract_page_content(html, "https://example.com/page")
+        states = {image.url.rsplit("/", 1)[-1]: image.alt_state for image in content.images}
+        self.assertEqual(states["photo-of-the-team.jpg"], "empty_content")
+        self.assertEqual(states["icon-arrow.svg"], "empty_decorative")
+        self.assertEqual(states["shape.png"], "empty_decorative")
+        self.assertEqual(states["thing.jpg"], "empty_decorative")
+        self.assertEqual(states["cover.jpg"], "empty_decorative")
+        self.assertEqual(states["beacon.gif"], "empty_decorative")
+        self.assertEqual(states["described.jpg"], "present")
+        self.assertEqual(states["forgotten.jpg"], "missing")
+
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [Page("https://example.com/page", "https://example.com/page", 200, "text/html", 1, 1,
+                             title="A title of reasonable length", meta_description="A description of reasonable length for the page.",
+                             h1s=["Heading"], word_count=500, images=content.images)]
+        scanner = Scanner(ScannerConfig(min_title_chars=1, max_title_chars=80, min_meta_description_chars=1, max_meta_description_chars=200, min_content_words=3))
+        scanner._add_content_issues(result, set())
+        empty = [issue for issue in result.issues if issue.rule_id == "content.image_alt_empty"]
+        self.assertEqual(len(empty), 1)
+        self.assertEqual(empty[0].evidence["images"], ["https://example.com/photo-of-the-team.jpg"])
+        # The genuinely-missing alt still belongs to the original rule.
+        missing = [issue for issue in result.issues if issue.rule_id == "content.image_alt_missing"]
+        self.assertEqual(len(missing), 1)
+
+    def test_decorative_only_page_raises_no_empty_alt_issue(self) -> None:
+        html = '<img src="/spacer.gif" alt=""><img src="/pattern-dots.svg" alt="">'
+        content = extract_page_content(html, "https://example.com/page")
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [Page("https://example.com/page", "https://example.com/page", 200, "text/html", 1, 1,
+                             title="A title of reasonable length", meta_description="A description of reasonable length for the page.",
+                             h1s=["Heading"], word_count=500, images=content.images)]
+        scanner = Scanner(ScannerConfig(min_title_chars=1, max_title_chars=80, min_meta_description_chars=1, max_meta_description_chars=200, min_content_words=3))
+        scanner._add_content_issues(result, set())
+        self.assertNotIn("content.image_alt_empty", {issue.rule_id for issue in result.issues})
+
     def test_content_rules_also_cover_non_indexable_pages(self) -> None:
         """Noindex pages have real content defects; they were silently skipped."""
         result = CrawlResult(start_url="https://example.com/", started_at="now")

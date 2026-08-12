@@ -20,6 +20,10 @@ class ImageReference:
     width: int | None = None
     height: int | None = None
     responsive: bool = False
+    # One of the ALT_* constants in analyzers.alt_text. Empty alt is valid
+    # markup for decorative images and a defect on content imagery, so the
+    # two are distinguished at parse time where the DOM context is available.
+    alt_state: str = "present"
 
 
 @dataclass(frozen=True)
