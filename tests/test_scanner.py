@@ -250,6 +250,36 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(rules.count("content.thin"), 2)
         self.assertEqual(rules.count("content.image_alt_missing"), 1)
 
+    def test_content_rules_also_cover_non_indexable_pages(self) -> None:
+        """Noindex pages have real content defects; they were silently skipped."""
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [
+            Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1,
+                 title="A perfectly reasonable title", meta_description="A description of a sensible length for search.", h1s=["One"], word_count=500),
+            Page("https://example.com/private", "https://example.com/private", 200, "text/html", 1, 1,
+                 robots_directives=["noindex"], word_count=500),
+        ]
+        scanner = Scanner(ScannerConfig(min_title_chars=1, max_title_chars=80, min_meta_description_chars=1, max_meta_description_chars=200, min_content_words=3))
+        scanner._add_content_issues(result, set())
+
+        noindex_issues = [issue for issue in result.issues if issue.url.endswith("/private")]
+        rules = {issue.rule_id for issue in noindex_issues}
+        self.assertIn("content.title_missing", rules)
+        self.assertIn("content.meta_description_missing", rules)
+        self.assertIn("content.h1_missing", rules)
+
+        # Tagged as non-indexable and dropped one severity level.
+        title_issue = next(issue for issue in noindex_issues if issue.rule_id == "content.title_missing")
+        self.assertFalse(title_issue.evidence["indexable"])
+        self.assertEqual(title_issue.severity, "warning")  # rule is error
+        # The indexable page keeps its natural severity and tag.
+        og_issue = next(issue for issue in result.issues if issue.rule_id == "social.og_image_missing" and not issue.url.endswith("/private"))
+        self.assertTrue(og_issue.evidence["indexable"])
+        self.assertEqual(og_issue.severity, "warning")
+
+        # canonical.missing stays indexable-only: a noindex page needs no canonical.
+        self.assertNotIn("canonical.missing", rules)
+
     def test_internal_link_and_page_semantics(self) -> None:
         content = extract_page_content(
             '<h1>Primary</h1><h3>Skipped</h3><a href="http://example.com/target" rel="nofollow"><img alt=""></a>',
