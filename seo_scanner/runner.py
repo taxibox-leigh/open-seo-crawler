@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import requests
 from .config import ScannerConfig
 from .analyzers.image import inspect_image
+from .analyzers.alt_text import ALT_EMPTY_CONTENT
 from .analyzers.content import PageContent, extract_page_content
 from .analyzers.directives import PageSignals, extract_page_signals
 from .analyzers.sitemap import parse_sitemap, sitemap_locations_from_robots
@@ -24,7 +25,7 @@ from .analyzers.link_header import parse_link_header
 from .discovery import DiscoveredResource, discover_css, discover_html
 from .fetch import Fetcher, FetchResponse
 from .models import Coverage, CrawlResult, Edge, ExternalLinkTarget, Issue, Page, RenderedPage, Resource, RobotsDocument, SitemapDocument
-from .rules import get_rule
+from .rules import RULES, get_rule
 from .scope import normalize_url, same_origin
 from .render import render_pages, select_render_urls
 
@@ -90,6 +91,7 @@ class Scanner:
         result.issues.extend(analyze_hreflang(result))
         result.coverage.pages_queued = len(state.page_queue)
         result.coverage.resources_discovered = len(state.pending_resources)
+        result.rule_coverage = _rule_coverage(result.issues)
         result.finished_at = _now()
         result.status = "partial" if not result.coverage.complete else "complete"
         return result
@@ -204,7 +206,8 @@ class Scanner:
             url=url, final_url=response.final_url, status=response.status, content_type=response.content_type,
             bytes=len(response.body), duration_ms=response.duration_ms, title=content.title,
             meta_description=content.meta_description, h1s=content.h1s, word_count=content.word_count,
-            truncated=response.truncated, redirect_hops=response.redirect_hops, canonical_url=signals.canonical_url,
+            truncated=response.truncated, redirect_hops=response.redirect_hops,
+            redirect_statuses=response.redirect_statuses, canonical_url=signals.canonical_url,
             canonical_urls=signals.canonical_urls, invalid_canonical_values=signals.invalid_canonical_values,
             robots_directives=signals.robots_directives, invalid_robots_directives=signals.invalid_robots_directives,
             robots_conflicts=signals.robots_conflicts, meta_refresh_url=signals.meta_refresh_url,
@@ -215,6 +218,7 @@ class Scanner:
             hreflang=signals.hreflang, declared_bytes=response.declared_bytes,
             viewport=content.viewport, og_title=content.og_title,
             og_description=content.og_description, og_image=content.og_image,
+            og_url=content.og_url,
             twitter_card=content.twitter_card, twitter_image=content.twitter_image,
             images=content.images, url_length=url_quality.length,
             query_parameter_count=url_quality.query_parameter_count,
@@ -257,6 +261,11 @@ class Scanner:
             result.issues.append(self._issue("link.redirect", "page", url, f"Internal link redirects to {response.final_url}", edges, {"hops": response.redirect_hops}))
         if len(response.redirect_hops) > 1:
             result.issues.append(self._issue("page.redirect_chain", "page", url, f"Page reaches {response.final_url} through {len(response.redirect_hops)} redirects", edges, {"hops": response.redirect_hops, "final_url": response.final_url}))
+        # A temporary redirect asks search engines to keep indexing the old URL,
+        # so a permanent move behind a 302 leaks its ranking signals.
+        temporary = [status for status in response.redirect_statuses if status in (302, 303, 307)]
+        if temporary:
+            result.issues.append(self._issue("page.temporary_redirect", "page", url, f"Page redirects to {response.final_url} with HTTP {temporary[0]}", edges, {"statuses": response.redirect_statuses, "final_url": response.final_url}))
         observed_size = max(response.declared_bytes or 0, len(response.body))
         if observed_size > self.config.max_page_size:
             result.issues.append(self._issue("page.oversized", "page", url, f"HTML response is {observed_size} bytes", edges, {"bytes": observed_size, "threshold": self.config.max_page_size}))
@@ -326,6 +335,14 @@ class Scanner:
         unresolved = [item for item in signals.jsonld_integrity_warnings if "no definition" in item]
         if unresolved:
             result.issues.append(self._issue("structured_data.unresolved_fragment", "page", url, "JSON-LD references undefined local identifiers", edges, {"warnings": unresolved}))
+        if signals.schema_missing_required:
+            types = sorted({item["type"] for item in signals.schema_missing_required})
+            result.issues.append(self._issue("structured_data.missing_required_property", "page", url, f"Structured data omits {len(signals.schema_missing_required)} required properties on {', '.join(types)}", edges, {"findings": signals.schema_missing_required}))
+        if signals.schema_invalid_values:
+            result.issues.append(self._issue("structured_data.invalid_property_value", "page", url, f"Structured data has {len(signals.schema_invalid_values)} property values in the wrong format", edges, {"findings": signals.schema_invalid_values}))
+        if signals.schema_missing_recommended:
+            types = sorted({item["type"] for item in signals.schema_missing_recommended})
+            result.issues.append(self._issue("structured_data.missing_recommended_property", "page", url, f"Structured data omits {len(signals.schema_missing_recommended)} recommended properties on {', '.join(types)}", edges, {"findings": signals.schema_missing_recommended}))
 
     def _add_url_quality_issues(self, result: CrawlResult, url: str, quality: UrlQuality, edges: set[Edge]) -> None:
         if quality.length > self.config.max_url_chars:
@@ -664,6 +681,24 @@ class Scanner:
             if page.canonical_url and page.canonical_url != url:
                 result.issues.append(self._issue("sitemap.url_noncanonical", "page", url, f"Sitemap URL canonicalizes to {page.canonical_url}", edges, {"canonical_url": page.canonical_url}))
 
+        # The inverse: indexable pages the sitemap never mentions. Only worth
+        # reporting when there is a sitemap to be absent from.
+        if not sitemap_urls:
+            return
+        listed = {_normalized_for_comparison(url) for url in sitemap_urls}
+        missing = [
+            page.url for page in result.pages
+            if _is_indexable_html(page)
+            and _normalized_for_comparison(page.url) not in listed
+            and _normalized_for_comparison(page.final_url) not in listed
+            and not _excluded_from_sitemap_expectation(page.url)
+        ]
+        for url in sorted(missing):
+            result.issues.append(self._issue(
+                "sitemap.page_missing", "page", url,
+                "Indexable page is not listed in any sitemap", edges,
+                {"sitemap_url_count": len(sitemap_urls)}))
+
     def _add_architecture_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
         navigation = [edge for edge in edges if edge.context == "a.href" and same_origin(result.start_url, edge.target_url)]
         adjacency: dict[str, set[str]] = {}
@@ -710,77 +745,157 @@ class Scanner:
                     {"sitemap_url": url},
                 ))
 
-        indexable = [page for page in result.pages if _is_indexable_html(page)]
+        # Links to redirects, counted by the page that has to be edited. The
+        # target-level link.redirect rule counts destinations, which understates
+        # the work: one redirected URL in a template touches every page.
+        redirecting = {
+            page.url for page in result.pages if page.redirect_hops
+        } | {
+            resource.url for resource in result.resources if resource.redirect_hops
+        }
+        for page in result.pages:
+            if not _is_html_page(page):
+                continue
+            offenders = sorted({
+                link.url for link in page.links
+                if link.url in redirecting and link.url != (page.final_url or page.url)
+            })
+            if offenders:
+                result.issues.append(self._issue(
+                    "link.redirect_source", "page", page.url,
+                    f"Page links to {len(offenders)} URLs that redirect", edges,
+                    {"links": offenders[:50], "count": len(offenders), "indexable": _is_indexable_html(page)}))
+            # Linking to the HTTP form of a URL that upgrades to HTTPS wastes a
+            # round trip on every visit and dilutes the link.
+            upgrades = sorted({
+                link.url for link in page.links
+                if link.url.startswith("http://")
+                and link.url.replace("http://", "https://", 1) in {p.final_url for p in result.pages}
+            })
+            if upgrades:
+                result.issues.append(self._issue(
+                    "link.http_to_https", "page", page.url,
+                    f"Page links to {len(upgrades)} HTTP URLs that redirect to HTTPS", edges,
+                    {"links": upgrades[:50], "indexable": _is_indexable_html(page)}))
+
+        # Link equity flows from every followed link, including links on pages
+        # that are themselves noindex, so the source set is all HTML pages.
+        html_pages = [page for page in result.pages if _is_html_page(page)]
+        indexable = [page for page in html_pages if _is_indexable_html(page)]
         if len(indexable) >= self.config.min_site_pages_for_link_metrics:
-            incoming_sources: dict[str, set[str]] = {}
+            dofollow_sources: dict[str, set[str]] = {}
+            nofollow_sources: dict[str, set[str]] = {}
             outgoing_targets: dict[str, set[str]] = {}
-            for source_page in indexable:
+            for source_page in html_pages:
                 source_url = source_page.final_url or source_page.url
                 for link in source_page.links:
-                    if link.nofollow or not same_origin(result.start_url, link.url):
+                    if not same_origin(result.start_url, link.url):
                         continue
-                    incoming_sources.setdefault(link.url, set()).add(source_url)
+                    if link.nofollow:
+                        nofollow_sources.setdefault(link.url, set()).add(source_url)
+                        continue
+                    dofollow_sources.setdefault(link.url, set()).add(source_url)
                     outgoing_targets.setdefault(source_url, set()).add(link.url)
-            for page in indexable:
+            for page in html_pages:
+                page_indexable = _is_indexable_html(page)
                 aliases_for_page = {page.url, page.final_url}
-                incoming_count = len(set().union(*(incoming_sources.get(alias, set()) for alias in aliases_for_page)))
+                dofollow_in = set().union(*(dofollow_sources.get(alias, set()) for alias in aliases_for_page))
+                nofollow_in = set().union(*(nofollow_sources.get(alias, set()) for alias in aliases_for_page))
                 outgoing_count = len(set().union(*(outgoing_targets.get(alias, set()) for alias in aliases_for_page)))
-                if page.url != result.start_url and incoming_count < self.config.min_internal_inlinks:
-                    result.issues.append(self._issue("architecture.low_inlinks", "page", page.url, f"Page has {incoming_count} incoming internal links", edges, {"count": incoming_count, "threshold": self.config.min_internal_inlinks}))
-                if outgoing_count == 0:
-                    result.issues.append(self._issue("architecture.no_outlinks", "page", page.url, "Page has no outgoing internal HTML links", edges))
+
+                def add(rule_id: str, message: str, evidence: dict[str, object]) -> None:
+                    payload = dict(evidence)
+                    payload["indexable"] = page_indexable
+                    severity = None if page_indexable else _downgraded_severity(get_rule(rule_id).severity)
+                    result.issues.append(self._issue(rule_id, "page", page.url, message, edges, payload, severity))
+
+                if page.url != result.start_url and len(dofollow_in) < self.config.min_internal_inlinks:
+                    add("architecture.low_inlinks", f"Page has {len(dofollow_in)} incoming dofollow internal links", {"count": len(dofollow_in), "threshold": self.config.min_internal_inlinks})
+                # A page whose only inbound equity comes through one link is a
+                # single edit away from being orphaned.
+                if page.url != result.start_url and len(dofollow_in) == 1:
+                    add("architecture.single_dofollow_inlink", "Page has exactly one incoming dofollow internal link", {"source_urls": sorted(dofollow_in)})
+                # Mixed rel on links to the same target is nearly always an
+                # accident of templating rather than a deliberate policy.
+                if dofollow_in and nofollow_in:
+                    add("architecture.mixed_rel_inlinks", f"Page receives {len(dofollow_in)} dofollow and {len(nofollow_in)} nofollow internal links", {"dofollow_urls": sorted(dofollow_in)[:20], "nofollow_urls": sorted(nofollow_in)[:20], "dofollow_count": len(dofollow_in), "nofollow_count": len(nofollow_in)})
+                if outgoing_count == 0 and page_indexable:
+                    add("architecture.no_outlinks", "Page has no outgoing internal HTML links", {})
 
     def _add_content_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
-        pages = [page for page in result.pages if _is_indexable_html(page)]
-        for page in pages:
-            if not page.canonical_urls and not page.invalid_canonical_values:
-                result.issues.append(self._issue("canonical.missing", "page", page.url, "Indexable page has no canonical declaration", edges))
+        # Content defects exist on noindex and canonicalised pages too, and
+        # commercial auditors report them as a separate bucket. Evaluate every
+        # HTML page; findings on non-indexable pages are tagged and dropped one
+        # severity level so triage can tell the two apart.
+        html_pages = [page for page in result.pages if _is_html_page(page)]
+        pages = [page for page in html_pages if _is_indexable_html(page)]
+        for page in html_pages:
+            indexable = _is_indexable_html(page)
+
+            def add(rule_id: str, message: str, evidence: dict[str, object] | None = None) -> None:
+                payload = dict(evidence or {})
+                payload["indexable"] = indexable
+                severity = None if indexable else _downgraded_severity(get_rule(rule_id).severity)
+                result.issues.append(self._issue(rule_id, "page", page.url, message, edges, payload, severity))
+
+            if indexable and not page.canonical_urls and not page.invalid_canonical_values:
+                add("canonical.missing", "Indexable page has no canonical declaration")
             if not page.title:
-                result.issues.append(self._issue("content.title_missing", "page", page.url, "Indexable page has no title element", edges))
+                add("content.title_missing", "Page has no title element")
             elif len(page.title) < self.config.min_title_chars:
-                result.issues.append(self._issue("content.title_too_short", "page", page.url, f"Title contains {len(page.title)} characters", edges, {"characters": len(page.title), "threshold": self.config.min_title_chars}))
+                add("content.title_too_short", f"Title contains {len(page.title)} characters", {"characters": len(page.title), "threshold": self.config.min_title_chars})
             elif len(page.title) > self.config.max_title_chars:
-                result.issues.append(self._issue("content.title_too_long", "page", page.url, f"Title contains {len(page.title)} characters", edges, {"characters": len(page.title), "threshold": self.config.max_title_chars}))
+                add("content.title_too_long", f"Title contains {len(page.title)} characters", {"characters": len(page.title), "threshold": self.config.max_title_chars})
             if not page.meta_description:
-                result.issues.append(self._issue("content.meta_description_missing", "page", page.url, "Indexable page has no meta description", edges))
+                add("content.meta_description_missing", "Page has no meta description")
             elif len(page.meta_description) < self.config.min_meta_description_chars:
-                result.issues.append(self._issue("content.meta_description_too_short", "page", page.url, f"Meta description contains {len(page.meta_description)} characters", edges, {"characters": len(page.meta_description), "threshold": self.config.min_meta_description_chars}))
+                add("content.meta_description_too_short", f"Meta description contains {len(page.meta_description)} characters", {"characters": len(page.meta_description), "threshold": self.config.min_meta_description_chars})
             elif len(page.meta_description) > self.config.max_meta_description_chars:
-                result.issues.append(self._issue("content.meta_description_too_long", "page", page.url, f"Meta description contains {len(page.meta_description)} characters", edges, {"characters": len(page.meta_description), "threshold": self.config.max_meta_description_chars}))
+                add("content.meta_description_too_long", f"Meta description contains {len(page.meta_description)} characters", {"characters": len(page.meta_description), "threshold": self.config.max_meta_description_chars})
             if not page.h1s:
-                result.issues.append(self._issue("content.h1_missing", "page", page.url, "Indexable page has no H1 heading", edges))
+                add("content.h1_missing", "Page has no H1 heading")
             elif len(page.h1s) > 1:
-                result.issues.append(self._issue("content.multiple_h1", "page", page.url, f"Page contains {len(page.h1s)} H1 headings", edges, {"count": len(page.h1s), "headings": page.h1s}))
+                add("content.multiple_h1", f"Page contains {len(page.h1s)} H1 headings", {"count": len(page.h1s), "headings": page.h1s})
             skipped = [(left, right) for left, right in zip(page.heading_levels, page.heading_levels[1:]) if right > left + 1]
             if skipped:
-                result.issues.append(self._issue("content.heading_order_skipped", "page", page.url, "Heading hierarchy skips one or more levels", edges, {"transitions": skipped, "levels": page.heading_levels}))
+                add("content.heading_order_skipped", "Heading hierarchy skips one or more levels", {"transitions": skipped, "levels": page.heading_levels})
             if page.word_count < self.config.min_content_words:
-                result.issues.append(self._issue("content.thin", "page", page.url, f"Page contains approximately {page.word_count} visible words", edges, {"words": page.word_count, "threshold": self.config.min_content_words}))
+                add("content.thin", f"Page contains approximately {page.word_count} visible words", {"words": page.word_count, "threshold": self.config.min_content_words})
             if not page.viewport:
-                result.issues.append(self._issue("content.viewport_missing", "page", page.url, "Indexable page has no viewport meta tag", edges))
+                add("content.viewport_missing", "Page has no viewport meta tag")
             missing_alt = sorted({image.url for image in page.images if image.alt is None})
             if missing_alt:
-                result.issues.append(self._issue("content.image_alt_missing", "page", page.url, f"Page contains {len(missing_alt)} images without alt attributes", edges, {"images": missing_alt}))
+                add("content.image_alt_missing", f"Page contains {len(missing_alt)} images without alt attributes", {"images": missing_alt})
+            empty_alt = sorted({image.url for image in page.images if image.alt_state == ALT_EMPTY_CONTENT})
+            if empty_alt:
+                add("content.image_alt_empty", f"Page contains {len(empty_alt)} content images with an empty alt attribute", {"images": empty_alt})
             empty_links = sorted({link.url for link in page.links if not link.text and _same_hostname(page.final_url or page.url, link.url)})
             if empty_links:
-                result.issues.append(self._issue("link.text_missing", "page", page.url, f"Page contains {len(empty_links)} internal links without descriptive text", edges, {"links": empty_links}))
+                add("link.text_missing", f"Page contains {len(empty_links)} internal links without descriptive text", {"links": empty_links})
             nofollow_links = sorted({link.url for link in page.links if link.nofollow and _same_hostname(page.final_url or page.url, link.url)})
             if nofollow_links:
-                result.issues.append(self._issue("link.internal_nofollow", "page", page.url, f"Page contains {len(nofollow_links)} nofollow internal links", edges, {"links": nofollow_links}))
+                add("link.internal_nofollow", f"Page contains {len(nofollow_links)} nofollow internal links", {"links": nofollow_links})
             insecure_links = sorted({link.url for link in page.links if (page.final_url or page.url).startswith("https://") and link.url.startswith("http://") and _same_hostname(page.final_url or page.url, link.url)})
             if insecure_links:
-                result.issues.append(self._issue("link.insecure_internal", "page", page.url, f"HTTPS page contains {len(insecure_links)} insecure internal links", edges, {"links": insecure_links}))
+                add("link.insecure_internal", f"HTTPS page contains {len(insecure_links)} insecure internal links", {"links": insecure_links})
             not_found_text = " ".join([page.title, *page.h1s]).casefold()
             if page.status == 200 and page.word_count <= self.config.max_soft_404_words and _looks_not_found(not_found_text):
-                result.issues.append(self._issue("page.soft_404", "page", page.url, "HTTP 200 page has a not-found title or primary heading and little content", edges, {"words": page.word_count, "threshold": self.config.max_soft_404_words}))
+                add("page.soft_404", "HTTP 200 page has a not-found title or primary heading and little content", {"words": page.word_count, "threshold": self.config.max_soft_404_words})
             if not page.og_title:
-                result.issues.append(self._issue("social.og_title_missing", "page", page.url, "Indexable page has no og:title value", edges))
+                add("social.og_title_missing", "Page has no og:title value")
             if not page.og_description:
-                result.issues.append(self._issue("social.og_description_missing", "page", page.url, "Indexable page has no og:description value", edges))
+                add("social.og_description_missing", "Page has no og:description value")
             if not page.og_image:
-                result.issues.append(self._issue("social.og_image_missing", "page", page.url, "Indexable page has no og:image value", edges))
+                add("social.og_image_missing", "Page has no og:image value")
             if not page.twitter_card:
-                result.issues.append(self._issue("social.twitter_card_missing", "page", page.url, "Indexable page has no twitter:card value", edges))
+                add("social.twitter_card_missing", "Page has no twitter:card value")
+            # og:url and the canonical disagreeing splits share signals between
+            # two URLs for the same page.
+            canonical_for_social = page.canonical_url or page.final_url or page.url
+            if page.og_url and _normalized_for_comparison(page.og_url) != _normalized_for_comparison(canonical_for_social):
+                add("social.og_url_canonical_mismatch", f"og:url is {page.og_url} but the canonical is {canonical_for_social}", {"og_url": page.og_url, "canonical_url": canonical_for_social})
+        # Duplicate content only matters between pages eligible to rank, so
+        # these stay on the indexable set.
         self._add_duplicate_content_issues(result, pages, edges, "title", "content.duplicate_title")
         self._add_duplicate_content_issues(result, pages, edges, "meta_description", "content.duplicate_meta_description")
         self._add_duplicate_content_issues(result, [page for page in pages if page.h1s], edges, "primary_h1", "content.duplicate_h1")
@@ -833,6 +948,8 @@ class Scanner:
             if missing_responsive:
                 result.issues.append(self._issue("image.missing_responsive_source", "page", page.url, f"Page loads {len(missing_responsive)} large images without srcset", edges, {"images": missing_responsive, "minimum_width": self.config.min_responsive_image_width}))
         for resource in resources.values():
+            if resource.bytes >= self.config.max_image_bytes:
+                result.issues.append(self._issue("image.oversized_bytes", "resource", resource.url, f"Image weighs {resource.bytes} bytes", edges, {"bytes": resource.bytes, "threshold": self.config.max_image_bytes}))
             if resource.bytes >= self.config.min_legacy_image_bytes and resource.image_format.lower() in {"jpeg", "png", "gif", "bmp", "tiff"}:
                 result.issues.append(self._issue("image.legacy_format", "resource", resource.url, f"{resource.bytes}-byte image is served as {resource.image_format}", edges, {"bytes": resource.bytes, "format": resource.image_format, "threshold": self.config.min_legacy_image_bytes}))
 
@@ -912,10 +1029,10 @@ class Scanner:
     def _remaining_bytes(self, result: CrawlResult) -> int:
         return max(1, self.config.max_total_bytes - result.coverage.bytes_downloaded)
 
-    def _issue(self, rule_id: str, entity: str, url: str, message: str, edges: set[Edge] | None = None, evidence: dict[str, object] | None = None) -> Issue:
+    def _issue(self, rule_id: str, entity: str, url: str, message: str, edges: set[Edge] | None = None, evidence: dict[str, object] | None = None, severity: str | None = None) -> Issue:
         rule = get_rule(rule_id)
         refs = _root_referrers(url, edges or set())
-        return Issue(rule.id, rule.title, rule.severity, entity, url, message, evidence or {}, refs, rule.remediation)
+        return Issue(rule.id, rule.title, severity or rule.severity, entity, url, message, evidence or {}, refs, rule.remediation)
 
     def _emit(self, result: CrawlResult, pages_queued: int, resources_queued: int, latest_url: str) -> None:
         if self.progress:
@@ -1015,6 +1132,56 @@ def _canonical_loops(canonicals: dict[str, str]) -> list[list[str]]:
         rotations = [tuple(loop[index:] + loop[:index]) for index in range(len(loop))]
         loops.add(min(rotations))
     return [list(loop) for loop in sorted(loops)]
+
+
+# Page shapes nobody lists in a sitemap on purpose. Without these the rule
+# reports paginated archives, parameter variants and documents as gaps —
+# against the audited site that was the difference between 138 findings and
+# the ~50 a commercial audit reports.
+_SITEMAP_EXEMPT_PATH = re.compile(
+    r"/page/\d+/?$"                     # paginated archives
+    r"|/(feed|amp|print)/?$"
+    r"|\.(pdf|docx?|xlsx?|pptx?|csv|zip|txt|xml)$",
+    re.I,
+)
+
+
+def _excluded_from_sitemap_expectation(url: str) -> bool:
+    split = urlsplit(url)
+    if split.query:
+        return True  # parameter variants canonicalize to their clean page
+    return bool(_SITEMAP_EXEMPT_PATH.search(split.path))
+
+
+def _normalized_for_comparison(url: str) -> str:
+    """Compare URLs without tripping over a trailing slash or scheme case."""
+    return (url or "").strip().rstrip("/").lower()
+
+
+def _rule_coverage(issues: list[Issue]) -> dict[str, int]:
+    """Finding count for every defined rule, including the zeroes."""
+    counts = {rule_id: 0 for rule_id in RULES}
+    for issue in issues:
+        counts[issue.rule_id] = counts.get(issue.rule_id, 0) + 1
+    return counts
+
+
+_SEVERITY_ORDER = ("error", "warning", "info")
+
+
+def _downgraded_severity(severity: str) -> str:
+    """One step less severe, floored at info."""
+    try:
+        return _SEVERITY_ORDER[min(_SEVERITY_ORDER.index(severity) + 1, len(_SEVERITY_ORDER) - 1)]
+    except ValueError:
+        return severity
+
+
+def _is_html_page(page: Page) -> bool:
+    """Fetched HTML worth analysing, indexable or not."""
+    if page.status >= 400 or page.truncated:
+        return False
+    return page.content_type in ("text/html", "application/xhtml+xml")
 
 
 def _is_indexable_html(page: Page) -> bool:

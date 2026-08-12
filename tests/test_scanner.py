@@ -250,6 +250,183 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(rules.count("content.thin"), 2)
         self.assertEqual(rules.count("content.image_alt_missing"), 1)
 
+    def test_empty_alt_is_split_into_decorative_and_content(self) -> None:
+        """alt="" is correct markup for decoration and a defect on content imagery."""
+        html = (
+            '<img src="/photo-of-the-team.jpg" alt="">'                      # content: flag
+            '<img src="/icon-arrow.svg" alt="">'                             # decorative filename
+            '<img src="/shape.png" alt="" role="presentation">'              # explicit role
+            '<img src="/thing.jpg" alt="" aria-hidden="true">'               # explicitly hidden
+            '<a href="/x" aria-label="Read the guide"><img src="/cover.jpg" alt=""></a>'  # parent named
+            '<img src="https://www.googletagmanager.com/beacon.gif" alt="">'  # third party
+            '<img src="/described.jpg" alt="A team member packing a box">'    # fine
+            '<img src="/forgotten.jpg">'                                      # missing, not empty
+        )
+        content = extract_page_content(html, "https://example.com/page")
+        states = {image.url.rsplit("/", 1)[-1]: image.alt_state for image in content.images}
+        self.assertEqual(states["photo-of-the-team.jpg"], "empty_content")
+        self.assertEqual(states["icon-arrow.svg"], "empty_decorative")
+        self.assertEqual(states["shape.png"], "empty_decorative")
+        self.assertEqual(states["thing.jpg"], "empty_decorative")
+        self.assertEqual(states["cover.jpg"], "empty_decorative")
+        self.assertEqual(states["beacon.gif"], "empty_decorative")
+        self.assertEqual(states["described.jpg"], "present")
+        self.assertEqual(states["forgotten.jpg"], "missing")
+
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [Page("https://example.com/page", "https://example.com/page", 200, "text/html", 1, 1,
+                             title="A title of reasonable length", meta_description="A description of reasonable length for the page.",
+                             h1s=["Heading"], word_count=500, images=content.images)]
+        scanner = Scanner(ScannerConfig(min_title_chars=1, max_title_chars=80, min_meta_description_chars=1, max_meta_description_chars=200, min_content_words=3))
+        scanner._add_content_issues(result, set())
+        empty = [issue for issue in result.issues if issue.rule_id == "content.image_alt_empty"]
+        self.assertEqual(len(empty), 1)
+        self.assertEqual(empty[0].evidence["images"], ["https://example.com/photo-of-the-team.jpg"])
+        # The genuinely-missing alt still belongs to the original rule.
+        missing = [issue for issue in result.issues if issue.rule_id == "content.image_alt_missing"]
+        self.assertEqual(len(missing), 1)
+
+    def test_decorative_only_page_raises_no_empty_alt_issue(self) -> None:
+        html = '<img src="/spacer.gif" alt=""><img src="/pattern-dots.svg" alt="">'
+        content = extract_page_content(html, "https://example.com/page")
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [Page("https://example.com/page", "https://example.com/page", 200, "text/html", 1, 1,
+                             title="A title of reasonable length", meta_description="A description of reasonable length for the page.",
+                             h1s=["Heading"], word_count=500, images=content.images)]
+        scanner = Scanner(ScannerConfig(min_title_chars=1, max_title_chars=80, min_meta_description_chars=1, max_meta_description_chars=200, min_content_words=3))
+        scanner._add_content_issues(result, set())
+        self.assertNotIn("content.image_alt_empty", {issue.rule_id for issue in result.issues})
+
+    def test_content_rules_also_cover_non_indexable_pages(self) -> None:
+        """Noindex pages have real content defects; they were silently skipped."""
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [
+            Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1,
+                 title="A perfectly reasonable title", meta_description="A description of a sensible length for search.", h1s=["One"], word_count=500),
+            Page("https://example.com/private", "https://example.com/private", 200, "text/html", 1, 1,
+                 robots_directives=["noindex"], word_count=500),
+        ]
+        scanner = Scanner(ScannerConfig(min_title_chars=1, max_title_chars=80, min_meta_description_chars=1, max_meta_description_chars=200, min_content_words=3))
+        scanner._add_content_issues(result, set())
+
+        noindex_issues = [issue for issue in result.issues if issue.url.endswith("/private")]
+        rules = {issue.rule_id for issue in noindex_issues}
+        self.assertIn("content.title_missing", rules)
+        self.assertIn("content.meta_description_missing", rules)
+        self.assertIn("content.h1_missing", rules)
+
+        # Tagged as non-indexable and dropped one severity level.
+        title_issue = next(issue for issue in noindex_issues if issue.rule_id == "content.title_missing")
+        self.assertFalse(title_issue.evidence["indexable"])
+        self.assertEqual(title_issue.severity, "warning")  # rule is error
+        # The indexable page keeps its natural severity and tag.
+        og_issue = next(issue for issue in result.issues if issue.rule_id == "social.og_image_missing" and not issue.url.endswith("/private"))
+        self.assertTrue(og_issue.evidence["indexable"])
+        self.assertEqual(og_issue.severity, "warning")
+
+        # canonical.missing stays indexable-only: a noindex page needs no canonical.
+        self.assertNotIn("canonical.missing", rules)
+
+    def test_internal_nofollow_is_reported_on_a_noindex_page(self) -> None:
+        """The only page on the audited site with internal nofollow links was
+        noindex, so the rule silently never fired."""
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [
+            Page("https://example.com/hub", "https://example.com/hub", 200, "text/html", 1, 1,
+                 robots_directives=["noindex", "nofollow"], word_count=500,
+                 links=[LinkReference("https://example.com/a", "A", True),
+                        LinkReference("https://example.com/b", "B", True)]),
+        ]
+        scanner = Scanner(ScannerConfig(min_title_chars=1, max_title_chars=80, min_meta_description_chars=1, max_meta_description_chars=200, min_content_words=3))
+        scanner._add_content_issues(result, set())
+        nofollow = [issue for issue in result.issues if issue.rule_id == "link.internal_nofollow"]
+        self.assertEqual(len(nofollow), 1)
+        self.assertEqual(nofollow[0].evidence["links"], ["https://example.com/a", "https://example.com/b"])
+        self.assertFalse(nofollow[0].evidence["indexable"])
+
+    def test_sitemap_coverage_skips_pages_nobody_lists(self) -> None:
+        """The inverse sitemap rule, with the exclusions that keep it honest."""
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.sitemaps = [SitemapDocument(url="https://example.com/sitemap.xml", kind="urlset", status=200,
+                                           urls=["https://example.com/"])]
+        listed = Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1)
+        missing = Page("https://example.com/real-page", "https://example.com/real-page", 200, "text/html", 1, 1)
+        paginated = Page("https://example.com/blog/page/2/", "https://example.com/blog/page/2/", 200, "text/html", 1, 1)
+        parameterised = Page("https://example.com/booking?service=mss", "https://example.com/booking?service=mss", 200, "text/html", 1, 1)
+        document = Page("https://example.com/checklist.pdf", "https://example.com/checklist.pdf", 200, "text/html", 1, 1)
+        noindexed = Page("https://example.com/private", "https://example.com/private", 200, "text/html", 1, 1, robots_directives=["noindex"])
+        result.pages = [listed, missing, paginated, parameterised, document, noindexed]
+        Scanner()._add_sitemap_issues(result, set())
+        flagged = {issue.url for issue in result.issues if issue.rule_id == "sitemap.page_missing"}
+        self.assertEqual(flagged, {"https://example.com/real-page"})
+
+    def test_sitemap_coverage_is_silent_without_a_sitemap(self) -> None:
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [Page("https://example.com/a", "https://example.com/a", 200, "text/html", 1, 1)]
+        Scanner()._add_sitemap_issues(result, set())
+        self.assertNotIn("sitemap.page_missing", {issue.rule_id for issue in result.issues})
+
+    def test_og_url_mismatch_is_reported_against_the_canonical(self) -> None:
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [
+            Page("https://example.com/a", "https://example.com/a", 200, "text/html", 1, 1,
+                 title="A title of reasonable length", meta_description="A description of reasonable length for the page.",
+                 h1s=["Heading"], word_count=500, og_url="https://example.com/somewhere-else"),
+            # Trailing-slash-only difference must not be reported.
+            Page("https://example.com/b/", "https://example.com/b/", 200, "text/html", 1, 1,
+                 title="Another title of reasonable length", meta_description="Another description of reasonable length here.",
+                 h1s=["Heading"], word_count=500, og_url="https://example.com/b"),
+        ]
+        scanner = Scanner(ScannerConfig(min_title_chars=1, max_title_chars=80, min_meta_description_chars=1, max_meta_description_chars=200, min_content_words=3))
+        scanner._add_content_issues(result, set())
+        flagged = {issue.url for issue in result.issues if issue.rule_id == "social.og_url_canonical_mismatch"}
+        self.assertEqual(flagged, {"https://example.com/a"})
+
+    def test_pages_linking_to_redirects_are_counted_by_source_page(self) -> None:
+        """Ahrefs counts the pages that need editing; we counted destinations."""
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        result.pages = [
+            Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1,
+                 links=[LinkReference("https://example.com/old", "Old", False),
+                        LinkReference("https://example.com/fine", "Fine", False)]),
+            Page("https://example.com/old", "https://example.com/new", 200, "text/html", 1, 1,
+                 redirect_hops=["https://example.com/old", "https://example.com/new"]),
+            Page("https://example.com/fine", "https://example.com/fine", 200, "text/html", 1, 1),
+        ]
+        Scanner(ScannerConfig(min_site_pages_for_link_metrics=99))._add_architecture_issues(result, set())
+        sources = [issue for issue in result.issues if issue.rule_id == "link.redirect_source"]
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].url, "https://example.com/")
+        self.assertEqual(sources[0].evidence["links"], ["https://example.com/old"])
+
+    def test_inlink_rules_count_dofollow_and_flag_mixed_rel(self) -> None:
+        result = CrawlResult(start_url="https://example.com/", started_at="now")
+        # /target gets one dofollow link and one nofollow link; /lonely gets one
+        # dofollow link only. Sources include a noindex page, whose followed
+        # links still pass equity.
+        result.pages = [
+            Page("https://example.com/", "https://example.com/", 200, "text/html", 1, 1,
+                 links=[LinkReference("https://example.com/target", "Target", False),
+                        LinkReference("https://example.com/lonely", "Lonely", False)]),
+            Page("https://example.com/noindexed", "https://example.com/noindexed", 200, "text/html", 1, 1,
+                 robots_directives=["noindex"],
+                 links=[LinkReference("https://example.com/target", "Target", True)]),
+            Page("https://example.com/target", "https://example.com/target", 200, "text/html", 1, 1,
+                 links=[LinkReference("https://example.com/", "Home", False)]),
+            Page("https://example.com/lonely", "https://example.com/lonely", 200, "text/html", 1, 1,
+                 links=[LinkReference("https://example.com/", "Home", False)]),
+        ]
+        scanner = Scanner(ScannerConfig(min_site_pages_for_link_metrics=1, min_internal_inlinks=1))
+        scanner._add_architecture_issues(result, set())
+        by_url = {}
+        for issue in result.issues:
+            by_url.setdefault(issue.url, set()).add(issue.rule_id)
+        self.assertIn("architecture.single_dofollow_inlink", by_url["https://example.com/target"])
+        self.assertIn("architecture.mixed_rel_inlinks", by_url["https://example.com/target"])
+        self.assertIn("architecture.single_dofollow_inlink", by_url["https://example.com/lonely"])
+        # One dofollow source only — no mixed-rel finding.
+        self.assertNotIn("architecture.mixed_rel_inlinks", by_url["https://example.com/lonely"])
+
     def test_internal_link_and_page_semantics(self) -> None:
         content = extract_page_content(
             '<h1>Primary</h1><h3>Skipped</h3><a href="http://example.com/target" rel="nofollow"><img alt=""></a>',
@@ -789,7 +966,7 @@ class IntegrationTests(unittest.TestCase):
             ndjson = [json.loads(line) for line in ndjson_output.read_text(encoding="utf-8").splitlines()]
             sarif = json.loads(sarif_output.read_text(encoding="utf-8"))
         self.assertEqual(code, 1)
-        self.assertEqual(report["schema_version"], "1.24")
+        self.assertEqual(report["schema_version"], "1.25")
         self.assertEqual(report["status"], "complete")
         self.assertIn("cache_control", csv_text)
         self.assertEqual(ndjson[0]["type"], "scan")

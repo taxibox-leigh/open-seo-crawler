@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import hashlib
 
-SCHEMA_VERSION = "1.24"
+SCHEMA_VERSION = "1.25"
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,10 @@ class ImageReference:
     width: int | None = None
     height: int | None = None
     responsive: bool = False
+    # One of the ALT_* constants in analyzers.alt_text. Empty alt is valid
+    # markup for decorative images and a defect on content imagery, so the
+    # two are distinguished at parse time where the DOM context is available.
+    alt_state: str = "present"
 
 
 @dataclass(frozen=True)
@@ -63,6 +67,7 @@ class Page:
     crawl_depth: int | None = None
     truncated: bool = False
     redirect_hops: list[str] = field(default_factory=list)
+    redirect_statuses: list[int] = field(default_factory=list)
     canonical_url: str = ""
     canonical_urls: list[str] = field(default_factory=list)
     invalid_canonical_values: list[str] = field(default_factory=list)
@@ -82,6 +87,7 @@ class Page:
     og_title: str = ""
     og_description: str = ""
     og_image: str = ""
+    og_url: str = ""
     twitter_card: str = ""
     twitter_image: str = ""
     images: list[ImageReference] = field(default_factory=list)
@@ -116,6 +122,7 @@ class Resource:
     bytes: int = 0
     duration_ms: int = 0
     redirect_hops: list[str] = field(default_factory=list)
+    redirect_statuses: list[int] = field(default_factory=list)
     truncated: bool = False
     cache_control: str = ""
     content_encoding: str = ""
@@ -133,6 +140,10 @@ class Edge:
     source_url: str
     target_url: str
     context: str
+    # rel tokens on the source anchor, space-joined and lowercased. Empty for
+    # non-anchor edges. Without this the exported graph cannot tell a followed
+    # link from a nofollowed one, which is what inlink-quality rules count.
+    rel: str = ""
 
 
 @dataclass
@@ -208,6 +219,7 @@ class ExternalLinkTarget:
     final_url: str = ""
     status: int | None = None
     redirect_hops: list[str] = field(default_factory=list)
+    redirect_statuses: list[int] = field(default_factory=list)
     referring_urls: list[str] = field(default_factory=list)
     error: str = ""
 
@@ -238,6 +250,10 @@ class CrawlResult:
     external_links: list[ExternalLinkTarget] = field(default_factory=list)
     rendered_pages: list[RenderedPage] = field(default_factory=list)
     comparison: BaselineComparison | None = None
+    # Every defined rule and how many findings it produced. A rule sitting at
+    # zero is either a clean site or a broken rule, and without this block
+    # there is no way to tell the two apart from the report alone.
+    rule_coverage: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

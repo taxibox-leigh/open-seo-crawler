@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 
 from ..scope import normalize_url
 from ..models import HreflangReference
+from .schema_org import validate_structured_data
 
 
 @dataclass
@@ -27,6 +28,9 @@ class PageSignals:
     duplicate_jsonld_blocks: list[dict[str, object]] = field(default_factory=list)
     jsonld_integrity_errors: list[str] = field(default_factory=list)
     jsonld_integrity_warnings: list[str] = field(default_factory=list)
+    schema_missing_required: list[dict] = field(default_factory=list)
+    schema_missing_recommended: list[dict] = field(default_factory=list)
+    schema_invalid_values: list[dict] = field(default_factory=list)
     hreflang: list[HreflangReference] = field(default_factory=list)
     html_canonical_urls: list[str] = field(default_factory=list)
     header_canonical_urls: list[str] = field(default_factory=list)
@@ -92,6 +96,8 @@ def extract_page_signals(page_url: str, html: str, x_robots_tag: str = "") -> Pa
         for value, indices in blocks_by_value.items() if len(indices) > 1
     ]
     integrity_errors, integrity_warnings = _jsonld_integrity(parsed_blocks)
+    schema_required, schema_recommended, schema_values = validate_structured_data(
+        [parsed for _, parsed in parsed_blocks]).as_dicts()
     hreflang: list[HreflangReference] = []
     for tag in soup.select('link[rel~="alternate"][hreflang][href]'):
         target = normalize_url(page_url, tag.get("href", ""))
@@ -108,6 +114,9 @@ def extract_page_signals(page_url: str, html: str, x_robots_tag: str = "") -> Pa
         jsonld_blocks=jsonld_blocks, duplicate_jsonld_blocks=duplicates,
         jsonld_integrity_errors=integrity_errors,
         jsonld_integrity_warnings=integrity_warnings, hreflang=hreflang,
+        schema_missing_required=schema_required,
+        schema_missing_recommended=schema_recommended,
+        schema_invalid_values=schema_values,
         html_canonical_urls=canonical_urls,
         html_robots_directives=html_directives,
     )
