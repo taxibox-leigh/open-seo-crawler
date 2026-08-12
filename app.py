@@ -23,6 +23,7 @@ import re as _re
 import time
 import logging
 import threading
+import queue
 from collections import deque, defaultdict as _dd
 from urllib.parse import urlparse, urljoin, urlunparse, parse_qs, urlencode
 from bs4 import BeautifulSoup
@@ -1390,15 +1391,15 @@ def _is_challenge_response(resp):
         return False
 
 
-def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, capture_no_js=False, challenge_browser=None):
+def _crawl_page(url, session, domain, renderer=None, ignore_noindex=False, capture_no_js=False, challenge_browser=None):
     """Crawl a single page and return audit data dict.
 
-    If ``pw_page`` (a live Playwright page) is provided, the HTML body will be
-    re-fetched via a headless browser so JS-rendered content is captured. We
-    still do the initial ``requests.get`` to get response headers / redirect
-    history cheaply and reliably.
+    If ``renderer`` (a live :class:`RenderService`) is provided, the HTML body
+    will be re-fetched via a headless browser so JS-rendered content is
+    captured. We still do the initial ``requests.get`` to get response headers
+    / redirect history cheaply and reliably.
 
-    ``capture_no_js``: when True AND ``pw_page`` produced a successful render,
+    ``capture_no_js``: when True AND ``renderer`` produced a successful render,
     also parse the original (pre-JS) HTML and attach a subset of fields to
     ``result['non_js']`` plus a diff/severity summary at ``result['js_diff']``.
     Lets the user see what content is JS-only and therefore at risk for AI
@@ -1695,25 +1696,13 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         # Skipped when the body came from the challenge browser: that HTML is
         # already browser-rendered, and re-fetching through the headless
         # renderer would just land back on the interstitial.
-        if pw_page is not None and not challenge_html and ('text/html' in ctype or 'application/xhtml' in ctype):
-            try:
-                pw_page.goto(resp.url, wait_until='load', timeout=20000)
-            except Exception as e:
-                # Even if goto times out, the page may have loaded enough of
-                # the DOM to be useful — keep going and let content() decide.
-                result.setdefault('render_errors', []).append(f'goto: {str(e)[:160]}')
-            # Best-effort settle window for late-injected trackers
-            try:
-                pw_page.wait_for_load_state('networkidle', timeout=4000)
-            except Exception:
-                pass
-            try:
-                rendered = pw_page.content()
-                if rendered and len(rendered) > 100:
-                    raw_html = rendered[:5_000_000]
-                    result['js_rendered'] = True
-            except Exception as e:
-                result.setdefault('render_errors', []).append(f'content: {str(e)[:160]}')
+        if renderer is not None and not challenge_html and ('text/html' in ctype or 'application/xhtml' in ctype):
+            rendered, render_error = renderer.render(resp.url)
+            if render_error:
+                result.setdefault('render_errors', []).append(render_error)
+            if rendered:
+                raw_html = rendered[:5_000_000]
+                result['js_rendered'] = True
 
         soup = BeautifulSoup(raw_html, 'html.parser')
 
@@ -2417,6 +2406,120 @@ def _teardown_pw(pw_page, pw_browser, pw_ctx):
         if obj is not None:
             try: getattr(obj, method)()
             except Exception: pass
+
+
+class RenderService:
+    """Owns Playwright on one dedicated thread and renders URLs on request.
+
+    Playwright's sync API binds every object to the greenlet that created it.
+    Creating the browser in the SSE generator and then calling it from a
+    ThreadPoolExecutor worker raises "Cannot switch to a different thread" on
+    every single page, which silently degrades the crawl to raw HTML. So all
+    Playwright calls — start, navigate, read, stop — happen on the one thread
+    this class owns; crawl workers post a URL and block for the reply.
+
+    Rendering is serialised through a single page. That matches the existing
+    single-worker clamp for JS crawls and keeps one browser per crawl.
+    """
+
+    def __init__(self, user_agent, nav_timeout_ms=20000, settle_timeout_ms=4000,
+                 viewport=None):
+        self.user_agent = user_agent
+        self.nav_timeout_ms = nav_timeout_ms
+        self.settle_timeout_ms = settle_timeout_ms
+        self.viewport = viewport or {'width': 1280, 'height': 900}
+        self.available = False
+        self.error = None
+        self._requests = queue.Queue()
+        self._ready = threading.Event()
+        self._thread = None
+
+    def start(self):
+        """Boot the browser thread. Returns True when rendering is usable."""
+        self._thread = threading.Thread(target=self._run, name='render-service', daemon=True)
+        self._thread.start()
+        # Browser launch is slow; allow generous headroom before giving up.
+        if not self._ready.wait(timeout=120):
+            self.error = 'render service did not start within 120s'
+            return False
+        return self.available
+
+    def render(self, url):
+        """Return (html, error). Called from any thread."""
+        if not self.available:
+            return None, self.error or 'render service unavailable'
+        done = threading.Event()
+        slot = {}
+        self._requests.put((url, slot, done))
+        # One page must never stall the whole crawl: cap the wait at the
+        # navigation and settle budget plus a margin for browser overhead.
+        budget = (self.nav_timeout_ms + self.settle_timeout_ms) / 1000 + 30
+        if not done.wait(timeout=budget):
+            return None, f'render timed out after {budget:.0f}s'
+        return slot.get('html'), slot.get('error')
+
+    def stop(self):
+        if self._thread is None:
+            return
+        self._requests.put(None)
+        self._thread.join(timeout=60)
+
+    def _run(self):
+        pw_ctx = pw_browser = pw_page = None
+        try:
+            from playwright.sync_api import sync_playwright
+            pw_ctx = sync_playwright().start()
+            pw_browser = pw_ctx.chromium.launch(
+                headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
+            pw_page = pw_browser.new_page(viewport=self.viewport, user_agent=self.user_agent)
+            pw_page.set_default_timeout(self.nav_timeout_ms)
+            self.available = True
+        except Exception as exc:
+            self.error = str(exc)[:200]
+            self.available = False
+        finally:
+            self._ready.set()
+
+        if not self.available:
+            _teardown_pw(pw_page, pw_browser, pw_ctx)
+            return
+
+        try:
+            while True:
+                item = self._requests.get()
+                if item is None:
+                    break
+                url, slot, done = item
+                try:
+                    slot['html'], slot['error'] = self._render_one(pw_page, url)
+                except Exception as exc:
+                    slot['html'], slot['error'] = None, f'render: {str(exc)[:160]}'
+                finally:
+                    done.set()
+        finally:
+            _teardown_pw(pw_page, pw_browser, pw_ctx)
+
+    def _render_one(self, pw_page, url):
+        errors = []
+        try:
+            pw_page.goto(url, wait_until='load', timeout=self.nav_timeout_ms)
+        except Exception as exc:
+            # Even if goto times out, the DOM may be usable — let content() decide.
+            errors.append(f'goto: {str(exc)[:160]}')
+        # Best-effort settle window for late-injected trackers (GA4, GTM, pixels).
+        try:
+            pw_page.wait_for_load_state('networkidle', timeout=self.settle_timeout_ms)
+        except Exception:
+            pass
+        try:
+            html = pw_page.content()
+        except Exception as exc:
+            errors.append(f'content: {str(exc)[:160]}')
+            return None, '; '.join(errors)
+        if not html or len(html) <= 100:
+            errors.append('content: rendered body was empty')
+            return None, '; '.join(errors)
+        return html, '; '.join(errors) if errors else None
 
 
 
@@ -3306,25 +3409,18 @@ def crawl_site():
                 app.logger.warning(f"[crawler] challenge browser unavailable: {e}")
                 challenge_browser = None
 
-        # Launch Playwright browser once per crawl if JS rendering requested
-        pw_ctx = None
-        pw_browser = None
-        pw_page = None
+        # Launch the render service once per crawl if JS rendering requested.
+        # It owns Playwright on its own thread — see RenderService for why.
+        renderer = None
         if render_js:
-            try:
-                from playwright.sync_api import sync_playwright
-                pw_ctx = sync_playwright().start()
-                pw_browser = pw_ctx.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
-                pw_page = pw_browser.new_page(
-                    viewport={'width': 1280, 'height': 900},
-                    user_agent=crawl_ua,
-                )
-                pw_page.set_default_timeout(20000)
+            renderer = RenderService(user_agent=crawl_ua)
+            if renderer.start():
                 yield f"data: {json.dumps({'type': 'info', 'msg': 'JS rendering enabled (Playwright). Crawl will be 3-5x slower.'})}\n\n"
-            except Exception as e:
-                app.logger.warning(f"[crawler] Playwright init failed: {e}")
-                yield f"data: {json.dumps({'type': 'info', 'msg': f'JS rendering unavailable ({str(e)[:100]}); using raw HTML only.'})}\n\n"
-                pw_page = None
+            else:
+                app.logger.warning(f"[crawler] Playwright init failed: {renderer.error}")
+                yield f"data: {json.dumps({'type': 'info', 'msg': f'JS rendering unavailable ({str(renderer.error)[:100]}); using raw HTML only.'})}\n\n"
+                renderer.stop()
+                renderer = None
 
         if resumed_state:
             queue = deque(tuple(item) for item in resumed_state.get('queue', []))
@@ -3448,7 +3544,7 @@ def crawl_site():
         def _fetch_job(url, depth):
             """Worker: politeness-wait, fetch, return (url, depth, page_data)."""
             _wait_host_turn(url)
-            pd = _crawl_page(url, session, domain, pw_page=pw_page, ignore_noindex=ignore_noindex, capture_no_js=compare_no_js, challenge_browser=challenge_browser)
+            pd = _crawl_page(url, session, domain, renderer=renderer, ignore_noindex=ignore_noindex, capture_no_js=compare_no_js, challenge_browser=challenge_browser)
             pd['depth'] = depth
             _adjust_host_backoff(url, pd)
             return url, depth, pd
@@ -3673,7 +3769,8 @@ def crawl_site():
             }
             app.logger.info(f"[crawler] {crawl_id} suspended (resumable for {SUSPENDED_CRAWL_TTL//60}m): {len(results)} done, {len(queue)} queued")
             session.close()
-            _teardown_pw(pw_page, pw_browser, pw_ctx)
+            if renderer is not None:
+                renderer.stop()
             if challenge_browser is not None:
                 challenge_browser.close()
             ACTIVE_CRAWL_RULES.pop(crawl_id, None)
@@ -3688,7 +3785,8 @@ def crawl_site():
                 challenge_browser.close()
 
         session.close()
-        _teardown_pw(pw_page, pw_browser, pw_ctx)
+        if renderer is not None:
+            renderer.stop()
 
         # Summary
         avg_time = round(total_time / len(results), 2) if results else 0
