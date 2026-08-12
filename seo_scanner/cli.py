@@ -8,7 +8,7 @@ from pathlib import Path
 from .config import ScannerConfig
 from .runner import Scanner
 from .reports import write_ndjson, write_resource_csv, write_sarif
-from .baseline import apply_suppressions, compare_with_baseline
+from .baseline import add_content_change_issues, apply_suppressions, compare_with_baseline
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,6 +28,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _recount_rules(result) -> dict[str, int]:
+    """Rule coverage after any issues added post-scan."""
+    from .rules import RULES
+
+    counts = {rule_id: 0 for rule_id in RULES}
+    for issue in result.issues:
+        counts[issue.rule_id] = counts.get(issue.rule_id, 0) + 1
+    return counts
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     values = json.loads(args.config.read_text(encoding="utf-8")) if args.config else {}
@@ -39,10 +49,16 @@ def main(argv: list[str] | None = None) -> int:
         config = ScannerConfig.from_dict(values)
         progress = None if args.quiet else lambda item: print(json.dumps({"type": "progress", **item}), file=sys.stderr, flush=True)
         result = Scanner(config, progress).scan(args.url)
+        if args.baseline:
+            baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+            # Content-change findings must exist before suppression and the
+            # issue-level comparison run, or they escape both.
+            add_content_change_issues(result, baseline)
         if args.ignore_issues:
             apply_suppressions(result, _read_issue_ids(args.ignore_issues))
         if args.baseline:
-            compare_with_baseline(result, json.loads(args.baseline.read_text(encoding="utf-8")))
+            compare_with_baseline(result, baseline)
+        result.rule_coverage = _recount_rules(result)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
         if args.resource_csv:

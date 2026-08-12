@@ -374,6 +374,12 @@ UNFIXTURED = {
     "resource.mixed_content": "needs an HTTPS page referencing HTTP",
     "link.insecure_internal": "needs an HTTPS page linking to HTTP",
     "link.http_to_https": "needs an HTTPS site whose HTTP URLs upgrade",
+    # Baseline comparison happens after the scan, so a single-run fixture
+    # cannot reach these. Covered by tests/test_content_changes.py.
+    "content.title_changed": "needs a previous run; covered by the content-change tests",
+    "content.meta_description_changed": "needs a previous run; covered by the content-change tests",
+    "content.h1_changed": "needs a previous run; covered by the content-change tests",
+    "content.word_count_changed": "needs a previous run; covered by the content-change tests",
     # Need limits far below anything worth serving in a fixture.
     "crawl.limit_reached": "covered by the limits test",
     "robots.byte_limit": "needs a robots.txt past the byte limit",
