@@ -948,6 +948,8 @@ class Scanner:
             if missing_responsive:
                 result.issues.append(self._issue("image.missing_responsive_source", "page", page.url, f"Page loads {len(missing_responsive)} large images without srcset", edges, {"images": missing_responsive, "minimum_width": self.config.min_responsive_image_width}))
         for resource in resources.values():
+            if resource.bytes >= self.config.max_image_bytes:
+                result.issues.append(self._issue("image.oversized_bytes", "resource", resource.url, f"Image weighs {resource.bytes} bytes", edges, {"bytes": resource.bytes, "threshold": self.config.max_image_bytes}))
             if resource.bytes >= self.config.min_legacy_image_bytes and resource.image_format.lower() in {"jpeg", "png", "gif", "bmp", "tiff"}:
                 result.issues.append(self._issue("image.legacy_format", "resource", resource.url, f"{resource.bytes}-byte image is served as {resource.image_format}", edges, {"bytes": resource.bytes, "format": resource.image_format, "threshold": self.config.min_legacy_image_bytes}))
 

@@ -428,6 +428,7 @@ class RuleCoverageTest(unittest.TestCase):
             max_image_width=2000, max_image_height=2000,
             min_cache_seconds=604800, min_compression_bytes=1000,
             min_legacy_image_bytes=1000, min_responsive_image_width=500,
+            max_image_bytes=5000,
             render_enabled=False, accessibility_enabled=False,
         )
         cls.result = Scanner(config).scan(base)

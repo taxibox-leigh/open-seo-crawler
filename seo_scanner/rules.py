@@ -154,6 +154,7 @@ RULES = {
         Rule("document.metadata_outside_head", "Document metadata appears outside the head", "warning", "Move title and meta description declarations into the document head."),
         Rule("image.missing_dimensions", "Page images omit explicit dimensions", "info", "Declare positive width and height attributes to reserve layout space."),
         Rule("image.missing_responsive_source", "Large image has no responsive source set", "warning", "Provide srcset candidates so browsers can download an appropriately sized image."),
+        Rule("image.oversized_bytes", "Image is heavier than the configured byte budget", "warning", "Compress the image or serve a smaller variant sized for its display context."),
         Rule("image.legacy_format", "Large image uses a legacy delivery format", "info", "Consider serving a modern WebP, AVIF, or JPEG XL variant where browser support permits."),
         Rule("language.html_missing", "Page has no HTML language declaration", "warning", "Add a valid lang attribute to the root html element."),
         Rule("language.html_invalid", "HTML language declaration is invalid", "error", "Use a valid language tag in the root html lang attribute."),
