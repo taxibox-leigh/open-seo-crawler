@@ -24,8 +24,12 @@ class FetchResponse:
 
 
 class Fetcher:
-    def __init__(self, user_agent: str, timeout_seconds: float) -> None:
+    def __init__(self, user_agent: str, timeout_seconds: float, verify_tls: bool = True) -> None:
         self.session = requests.Session()
+        # Staging and pre-production hosts often serve a self-signed
+        # certificate. Auditing them is legitimate; refusing to is not the
+        # scanner's call, so verification is configurable and on by default.
+        self.session.verify = verify_tls
         # Keep requests/urllib3's capability-aware Accept-Encoding header. It
         # advertises Brotli only when a Brotli decoder is actually installed;
         # forcing `br` here can otherwise leave compressed response bytes
