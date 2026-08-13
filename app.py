@@ -3459,6 +3459,9 @@ def crawl_site():
                 renderer.stop()
                 renderer = None
 
+        # Internal URLs whose redirect chain leaves the site. Reported, not
+        # crawled as pages.
+        offsite_redirects = []
         if resumed_state:
             queue = deque(tuple(item) for item in resumed_state.get('queue', []))
             visited = set(resumed_state.get('visited', []))
@@ -3678,6 +3681,29 @@ def crawl_site():
                                 visited.add(_alt)
                             if any(r.get('url') == canonical_url for r in results):
                                 continue
+
+                        # An internal URL that redirects off-site is worth
+                        # knowing about, but the destination is somebody else's
+                        # page: recording it as one of ours applies every page
+                        # rule to a third party. /review-link.php hops to Google
+                        # Maps, which then reported a critical JS-diff against a
+                        # Google page. Keep the hop, drop the page.
+                        _final_host = ''
+                        try:
+                            _final_host = urlparse(canonical_url or url).netloc.lower().replace('www.', '')
+                        except Exception:
+                            pass
+                        if _final_host and _final_host != domain:
+                            page_data['offsite_redirect'] = True
+                            page_data['issues'] = list(page_data.get('issues') or []) + [
+                                f'Redirects off-site to {_final_host}'
+                            ]
+                            offsite_redirects.append({
+                                'url': url,
+                                'final_url': canonical_url or url,
+                                'chain': page_data.get('redirect_chain') or [],
+                            })
+                            continue
 
                         results.append(page_data)
                         if page_data.get('error'):
@@ -3987,6 +4013,7 @@ def crawl_site():
             'duplicate_bodies': [{'value': k[:8], 'urls': v} for k, v in sorted(dup_bodies.items(), key=lambda x: -len(x[1]))][:100],
             'redirect_chains': redirect_chains[:200],
             'orphans': orphans,
+            'offsite_redirects': offsite_redirects[:200],
             'sitemap_count': len(sitemap_urls_set),
             'depth_distribution': dict(depth_dist),
         }
