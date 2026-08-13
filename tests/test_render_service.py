@@ -178,3 +178,63 @@ class RenderServiceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# UTF-8 body, no charset in the Content-Type header — the shape that made the
+# no-JS pass decode as Latin-1 and report phantom differences.
+UTF8_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>What’s your next move?</title>
+<meta name="description" content="The 'Sticky Shooter' \U0001F440">
+</head><body><h1>Hey \U0001F44B</h1>
+<p>%s</p></body></html>
+""" % ("Body copy with an apostrophe: it’s fine. " * 30)
+
+
+class Utf8Handler(BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802
+        body = UTF8_HTML.encode("utf-8")
+        self.send_response(200)
+        # Deliberately no charset here.
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+@unittest.skipUnless(_playwright_available(), "playwright is not installed")
+class Utf8DecodingTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Utf8Handler)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.netloc = f"127.0.0.1:{cls.server.server_address[1]}"
+        cls.base = f"http://{cls.netloc}/"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def test_utf8_without_a_header_charset_is_decoded_correctly(self):
+        renderer = RenderService(user_agent="test-agent")
+        self.assertTrue(renderer.start(), msg=renderer.error)
+        session = requests.Session()
+        try:
+            page = _crawl_page(self.base, session, self.netloc,
+                               renderer=renderer, capture_no_js=True)
+        finally:
+            session.close()
+            renderer.stop()
+
+        self.assertEqual(page["title"], "What’s your next move?")
+        self.assertEqual(page["h1"], "Hey \U0001F44B")
+        # The pre-JS pass must decode identically, or every page with an
+        # apostrophe reports a phantom JS difference.
+        self.assertEqual(page["non_js"]["title"], page["title"])
+        self.assertEqual(page["non_js"]["h1"], page["h1"])
+        self.assertEqual(page["js_diff"]["fields"], [])
+        self.assertEqual(page["js_diff"]["severity"], "none")

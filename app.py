@@ -1783,6 +1783,16 @@ def _crawl_page(url, session, domain, renderer=None, ignore_noindex=False, captu
             result['issues'].append(f'Non-HTML ({ctype.split(";")[0]})')
             return result
 
+        # requests falls back to ISO-8859-1 for text/* when the Content-Type
+        # header carries no charset, per RFC 2616. Most pages are UTF-8 and
+        # declare it in a meta tag instead, so that fallback turns every
+        # non-ASCII character into mojibake — "What’s" becomes "Whatâ€™s".
+        # The rendered DOM comes back from the browser correctly decoded, so
+        # the two disagree on any page with an apostrophe or an emoji and the
+        # JS-vs-source diff reports a difference that does not exist.
+        if not challenge_html and 'charset=' not in (resp.headers.get('Content-Type') or '').lower():
+            resp.encoding = resp.apparent_encoding or 'utf-8'
+
         # Limit body size
         raw_html = (challenge_html or resp.text)[:5_000_000]
         # Keep pre-JS HTML for the JS-vs-non-JS diff (cheap; one extra ref).
