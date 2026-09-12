@@ -112,6 +112,8 @@ class Page:
     links: list[LinkReference] = field(default_factory=list)
     heading_levels: list[int] = field(default_factory=list)
     fetch_attempts: int = 1
+    # Mirrors PageContent.target_terms — see analyzers/content.py.
+    target_terms: dict[str, dict[str, bool]] = field(default_factory=dict)
 
 
 @dataclass

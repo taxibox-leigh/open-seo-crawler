@@ -3,11 +3,13 @@ from __future__ import annotations
 import time
 import hashlib
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from collections import deque
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Callable
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import requests
 from .config import ScannerConfig
@@ -30,6 +32,64 @@ from .scope import normalize_url, same_origin
 from .render import render_pages, select_render_urls
 
 ProgressCallback = Callable[[dict[str, object]], None]
+
+_TRAILING_NUMERIC_SUFFIX = re.compile(r"-\d+$")
+
+
+@lru_cache(maxsize=8)
+def _compiled_template_patterns(patterns: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
+    """Compiled once per distinct pattern set, not per page — term matching
+    runs on the hot path for every page fetched."""
+    return tuple(re.compile(pattern) for pattern in patterns)
+
+
+def _normalize_template_term(raw_term: str) -> str:
+    """1. percent-decode + casefold, 2. strip a trailing WordPress duplicate-
+    slug suffix (north-melbourne-2 -> "north melbourne" -- a real case in
+    production data), 3. hyphens/underscores -> spaces, 4. strip diacritics.
+    Skipping short/stoplisted results happens in the caller."""
+    term = unquote(raw_term).casefold()
+    term = _TRAILING_NUMERIC_SUFFIX.sub("", term)
+    term = re.sub(r"[-_]+", " ", term)
+    term = unicodedata.normalize("NFKD", term)
+    term = "".join(ch for ch in term if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", term).strip()
+
+
+def _derive_target_terms(url: str, config: ScannerConfig) -> list[str]:
+    """The targeting term(s) a page's URL declares it should rank for, per
+    the first configured template_target_patterns entry whose named "term"
+    group matches this URL's path. Empty when no pattern matches, the term
+    normalises under 3 characters, or it's in template_term_stoplist (a
+    same-shape non-suburb sub-page like /self-storage/brisbane/cost/)."""
+    if not config.template_target_patterns:
+        return []
+    path = urlsplit(url).path
+    for pattern in _compiled_template_patterns(tuple(config.template_target_patterns)):
+        match = pattern.search(path)
+        if not match:
+            continue
+        term = _normalize_template_term(match.group("term"))
+        # Stoplist entries are configured as raw slugs (e.g. the hyphenated
+        # "security-options"), same as template_target_patterns' own "term"
+        # group input -- normalise them the same way before comparing, or a
+        # hyphenated config entry never matches the space-joined term.
+        stoplist = {_normalize_template_term(entry) for entry in config.template_term_stoplist}
+        if len(term) < 3 or term in stoplist:
+            return []
+        return [term]
+    return []
+
+
+def _matching_template_pattern(url: str, config: ScannerConfig) -> str:
+    """Which configured pattern (raw string, for evidence) produced this
+    page's target term. Only ever called for the small subset of pages that
+    have one, so an uncached re.search here is not a hot-path concern."""
+    path = urlsplit(url).path
+    for pattern in config.template_target_patterns:
+        if re.search(pattern, path):
+            return pattern
+    return ""
 
 
 @dataclass
@@ -191,7 +251,8 @@ class Scanner:
             encoding = analyze_encoding(response.body, response.headers.get("content-type", ""))
             html = response.body.decode(encoding.effective_charset, errors="replace")
             signals = extract_page_signals(response.final_url, html, response.headers.get("x-robots-tag", ""))
-            content = extract_page_content(html, response.final_url)
+            target_terms = _derive_target_terms(response.final_url, self.config)
+            content = extract_page_content(html, response.final_url, target_terms=target_terms)
             document = analyze_document(html)
         else:
             signals = extract_page_signals(response.final_url, "", response.headers.get("x-robots-tag", ""))
@@ -236,7 +297,7 @@ class Scanner:
             html_canonical_urls=signals.html_canonical_urls,
             html_robots_directives=signals.html_robots_directives,
             links=content.links, heading_levels=content.heading_levels,
-            fetch_attempts=attempts,
+            fetch_attempts=attempts, target_terms=content.target_terms,
         ))
         result.coverage.pages_fetched += 1
         if is_html:
@@ -655,10 +716,20 @@ class Scanner:
     def _add_canonical_issues(self, result: CrawlResult, edges: set[Edge]) -> None:
         pages = {page.url: page for page in result.pages}
         canonicals = {page.url: page.canonical_url for page in result.pages if page.canonical_url}
+        pagination_pattern = re.compile(self.config.pagination_path_pattern)
         for page in result.pages:
             target_url = page.canonical_url
             if not target_url:
                 continue
+            first_page_url = _depaginated_url(page.url, pagination_pattern)
+            if first_page_url and _normalized_for_comparison_decoded(target_url) == _normalized_for_comparison_decoded(first_page_url):
+                page_match = pagination_pattern.search(urlsplit(page.url).path)
+                page_number = int(page_match.group(1)) if page_match and page_match.groups() else None
+                result.issues.append(self._issue(
+                    "canonical.pagination_to_first_page", "page", page.url,
+                    f"Paginated page canonicalizes to {target_url}", edges,
+                    {"canonical_url": target_url, "first_page_url": first_page_url, "page_number": page_number},
+                ))
             target = pages.get(target_url)
             if target and target.status >= 400:
                 result.issues.append(self._issue("canonical.http_error", "page", page.url, f"Canonical target returns HTTP {target.status}", edges, {"canonical_url": target_url, "status": target.status}))
@@ -865,6 +936,16 @@ class Scanner:
             skipped = [(left, right) for left, right in zip(page.heading_levels, page.heading_levels[1:]) if right > left + 1]
             if skipped:
                 add("content.heading_order_skipped", "Heading hierarchy skips one or more levels", {"transitions": skipped, "levels": page.heading_levels})
+            for term, match in page.target_terms.items():
+                if match["in_title"] or match["in_h1"]:
+                    continue  # targeted in the field that matters most; not weak either way
+                evidence = {"term": term, "in_title": match["in_title"], "in_h1": match["in_h1"],
+                           "in_body": match["in_body"],
+                           "pattern": _matching_template_pattern(page.url, self.config)}
+                if match["in_body"]:
+                    add("content.template_term_weak", f"Page mentions its targeting term \"{term}\" only in the body", evidence)
+                else:
+                    add("content.template_term_missing", f"Page never mentions its targeting term \"{term}\"", evidence)
             if page.word_count < self.config.min_content_words:
                 add("content.thin", f"Page contains approximately {page.word_count} visible words", {"words": page.word_count, "threshold": self.config.min_content_words})
             if not page.viewport:
@@ -1162,6 +1243,27 @@ def _excluded_from_sitemap_expectation(url: str) -> bool:
 def _normalized_for_comparison(url: str) -> str:
     """Compare URLs without tripping over a trailing slash or scheme case."""
     return (url or "").strip().rstrip("/").lower()
+
+
+def _normalized_for_comparison_decoded(url: str) -> str:
+    """Like _normalized_for_comparison, but also unquotes percent-encoding
+    first. Without this, a canonical that differs from its URL only by
+    percent-encoding (e.g. an unresolved %guide-category% template
+    placeholder — a real but different site defect) reads as a pagination
+    bug it is not."""
+    return _normalized_for_comparison(unquote(url or ""))
+
+
+def _depaginated_url(url: str, pagination_pattern: re.Pattern[str]) -> str | None:
+    """If `url`'s path matches the pagination pattern, the URL with the
+    /page/N segment removed — i.e. what page 1 of this archive would be.
+    None if `url` isn't a paginated page at all."""
+    split = urlsplit(url)
+    match = pagination_pattern.search(split.path)
+    if not match:
+        return None
+    first_page_path = split.path[:match.start()] or "/"
+    return split._replace(path=first_page_path).geturl()
 
 
 def _rule_coverage(issues: list[Issue]) -> dict[str, int]:

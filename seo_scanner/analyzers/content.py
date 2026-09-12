@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import hashlib
 from dataclasses import dataclass, field
+from typing import Sequence
 
 from bs4 import BeautifulSoup
 
@@ -29,9 +30,32 @@ class PageContent:
     visible_text_fingerprint: str = ""
     links: list[LinkReference] = field(default_factory=list)
     heading_levels: list[int] = field(default_factory=list)
+    # {"north melbourne": {"in_title": False, "in_h1": True, "in_body": True}}
+    # for content.template_term_missing/_weak (templated-page targeting).
+    # Terms are already normalised by the caller (runner.py derives them from
+    # the URL + config immediately before this call); resolved here, at parse
+    # time, rather than storing full body text on Page for a later check.
+    target_terms: dict[str, dict[str, bool]] = field(default_factory=dict)
 
 
-def extract_page_content(html: str, base_url: str = "") -> PageContent:
+def _normalized_word_tokens(text: str) -> list[str]:
+    return [word.casefold() for word in re.findall(r"[^\W_]+(?:[’'-][^\W_]+)*", text, re.UNICODE)]
+
+
+def _contains_term(term_words: list[str], haystack_words: list[str]) -> bool:
+    """Contiguous-subsequence match, not membership or fuzzy matching --
+    membership alone would match "melbourne" for a "north melbourne" term
+    and destroy the rule's entire value."""
+    if not term_words:
+        return False
+    span = len(term_words)
+    return any(
+        haystack_words[i:i + span] == term_words
+        for i in range(len(haystack_words) - span + 1)
+    )
+
+
+def extract_page_content(html: str, base_url: str = "", target_terms: Sequence[str] = ()) -> PageContent:
     soup = BeautifulSoup(html, "lxml")
     title = soup.title.get_text(" ", strip=True) if soup.title else ""
     description = soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
@@ -76,11 +100,23 @@ def extract_page_content(html: str, base_url: str = "") -> PageContent:
     words = re.findall(r"[^\W_]+(?:[’'-][^\W_]+)*", text, re.UNICODE)
     normalized_words = [word.casefold() for word in words]
     normalized_text = " ".join(normalized_words)
+    term_matches: dict[str, dict[str, bool]] = {}
+    if target_terms:
+        title_words = _normalized_word_tokens(title)
+        h1_words = _normalized_word_tokens(" ".join(h1s))
+        for term in target_terms:
+            term_words = term.split()
+            term_matches[term] = {
+                "in_title": _contains_term(term_words, title_words),
+                "in_h1": _contains_term(term_words, h1_words),
+                "in_body": _contains_term(term_words, normalized_words),
+            }
     return PageContent(
         title, meta_description, h1s, len(words), viewport, og_title,
         og_description, og_image, og_url, twitter_card, twitter_image, images,
         hashlib.sha256(normalized_text.encode("utf-8")).hexdigest() if normalized_text else "",
         _simhash(normalized_words), links, heading_levels,
+        target_terms=term_matches,
     )
 
 

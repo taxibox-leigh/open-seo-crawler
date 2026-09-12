@@ -92,7 +92,11 @@ class CoverageHandler(BaseHTTPRequestHandler):
                 '<a href="/encoding-conflict">n</a><a href="/verbose">o</a>'
                 '<a href="/robots-conflict">p</a><a href="/noindex-canonical">q</a>'
                 '<a href="/no-structure">r</a><a href="/bad-shapes">s</a>'
-                '<a href="/broken-resources">t</a>',
+                '<a href="/broken-resources">t</a>'
+                '<a href="/archive/page/2">u</a><a href="/archive/page/3">v</a>'
+                '<a href="/archive/%25tpl%25/page/2">w</a>'
+                '<a href="/suburb/city/hallam">x</a><a href="/suburb/city/parkville">y</a>'
+                '<a href="/suburb/city/st-kilda">z</a><a href="/suburb/city/cost">aa</a>',
                 "<title>A hub page linking to every fixture page</title>"
                 '<meta name="description" content="A hub page whose only job is to make every other fixture page reachable from the crawl seed.">',
             ), {}),
@@ -302,6 +306,47 @@ class CoverageHandler(BaseHTTPRequestHandler):
             "/redirect-hop": (302, "text/plain", b"", {"Location": "/"}),
             "/gone": (404, "text/html", b"<title>Gone</title>", {}),
             "/blocked": (200, "text/html", _page("<h1>Blocked</h1>", "<title>Blocked</title>"), {}),
+            # canonical.pagination_to_first_page: an archive's page 2 whose
+            # canonical points at page 1 (the bug); page 3 self-canonicalises
+            # correctly (must not fire); a third page's URL and canonical
+            # differ only by percent-encoding of a template placeholder --
+            # the real %guide-category%-shaped false positive a naive
+            # "canonical != self" check would wrongly flag as pagination.
+            "/archive/page/2": (200, "text/html", _page(
+                f"<h1>Archive, page 2</h1><p>{LONG_TEXT}</p>",
+                f'<title>Archive, page 2</title><link rel="canonical" href="{base}/archive">',
+            ), {}),
+            "/archive/page/3": (200, "text/html", _page(
+                f"<h1>Archive, page 3</h1><p>{LONG_TEXT}</p>",
+                f'<title>Archive, page 3</title><link rel="canonical" href="{base}/archive/page/3">',
+            ), {}),
+            "/archive/%25tpl%25/page/2": (200, "text/html", _page(
+                f"<h1>Templated archive, page 2</h1><p>{LONG_TEXT}</p>",
+                f'<title>Templated archive, page 2</title><link rel="canonical" href="{base}/archive/%tpl%/page/2">',
+            ), {}),
+            # content.template_term_missing/_weak: template_target_patterns
+            # in setUpClass targets /suburb/<city>/<term>/. Hallam never
+            # mentions its own term at all; Parkville mentions it only in
+            # the body; St Kilda is properly targeted (must fire neither --
+            # proves the multi-word/hyphen normalisation); "cost" has the
+            # same URL shape but is in template_term_stoplist (must fire
+            # neither -- proves the false-positive guard).
+            "/suburb/city/hallam": (200, "text/html", _page(
+                f"<h1>Self Storage Kooyong</h1><p>{LONG_TEXT} Convenient storage in Kooyong for locals.</p>",
+                "<title>Self Storage Kooyong</title>",
+            ), {}),
+            "/suburb/city/parkville": (200, "text/html", _page(
+                f"<h1>Self Storage Melbourne</h1><p>{LONG_TEXT} Our Parkville facility is popular with residents.</p>",
+                "<title>Self Storage Melbourne</title>",
+            ), {}),
+            "/suburb/city/st-kilda": (200, "text/html", _page(
+                f"<h1>Self Storage St Kilda</h1><p>{LONG_TEXT} St Kilda locals love our mobile storage service.</p>",
+                "<title>Self Storage St Kilda</title>",
+            ), {}),
+            "/suburb/city/cost": (200, "text/html", _page(
+                f"<h1>Storage Cost Guide</h1><p>{LONG_TEXT} Understanding the cost of mobile storage.</p>",
+                "<title>How Much Does Storage Cost</title>",
+            ), {}),
             # Resources.
             "/style.css": (200, "text/css", (b"body{background:url('/nested.png')}" + b"/* padding */" * 2000), {}),
             "/script.js": (200, "text/html", b"<html>not javascript</html>", {}),
@@ -430,6 +475,14 @@ class RuleCoverageTest(unittest.TestCase):
             min_legacy_image_bytes=1000, min_responsive_image_width=500,
             max_image_bytes=5000,
             render_enabled=False, accessibility_enabled=False,
+            # content.template_term_missing/_weak are inert by default
+            # (template_target_patterns: []) -- deliberately so for a
+            # general-purpose scanner, but it means this harness config is
+            # the ONLY thing exercising them. If a future edit removes this,
+            # both rules go silently dead, which is exactly the failure
+            # this harness exists to prevent.
+            template_target_patterns=[r"^/suburb/[^/]+/(?P<term>[^/]+)/?$"],
+            template_term_stoplist=["cost"],
         )
         cls.result = Scanner(config).scan(base)
         cls.fired = {rule_id: count for rule_id, count in cls.result.rule_coverage.items() if count}
@@ -453,6 +506,24 @@ class RuleCoverageTest(unittest.TestCase):
             "Either extend the fixture to trigger them or add them to "
             "UNFIXTURED with a reason:\n  " + "\n  ".join(missing)
         ))
+
+    def _urls_for(self, rule_id: str) -> set[str]:
+        return {issue.url for issue in self.result.issues if issue.rule_id == rule_id}
+
+    def test_pagination_self_canonical_and_percent_encoded_routes_do_not_fire(self) -> None:
+        flagged = self._urls_for("canonical.pagination_to_first_page")
+        self.assertTrue(any(url.endswith("/archive/page/2") for url in flagged))
+        self.assertFalse(any(url.endswith("/archive/page/3") for url in flagged))
+        self.assertFalse(any("tpl" in url for url in flagged))
+
+    def test_template_targeting_st_kilda_and_cost_routes_fire_neither_rule(self) -> None:
+        missing = self._urls_for("content.template_term_missing")
+        weak = self._urls_for("content.template_term_weak")
+        self.assertTrue(any(url.endswith("/suburb/city/hallam") for url in missing))
+        self.assertTrue(any(url.endswith("/suburb/city/parkville") for url in weak))
+        for url in list(missing) + list(weak):
+            self.assertFalse(url.endswith("/suburb/city/st-kilda"), url)
+            self.assertFalse(url.endswith("/suburb/city/cost"), url)
 
     def test_excused_rules_are_still_real_rules(self) -> None:
         """UNFIXTURED must not rot after a rule is renamed or removed."""
