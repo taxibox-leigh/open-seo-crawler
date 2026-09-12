@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import unittest
 import requests
@@ -25,7 +26,10 @@ from seo_scanner.baseline import apply_suppressions, compare_with_baseline
 from seo_scanner.config import ScannerConfig
 from seo_scanner.discovery import discover_css, discover_html
 from seo_scanner.fetch import Fetcher, FetchResponse
-from seo_scanner.runner import Scanner, _RunState, _is_browser_subresource
+from seo_scanner.runner import (
+    Scanner, _RunState, _is_browser_subresource,
+    _depaginated_url, _derive_target_terms, _normalize_template_term, _normalized_for_comparison_decoded,
+)
 from seo_scanner.scope import normalize_url
 from seo_scanner.models import CrawlResult, Edge, ImageReference, Issue, LinkReference, Page, RenderedPage, Resource, SitemapDocument
 from seo_scanner.render import render_pages, select_render_urls
@@ -88,7 +92,13 @@ class FakePage:
 
 
 class FakeBrowser:
-    def new_page(self) -> FakePage:
+    # Class-level, not instance: render_pages() creates and discards the
+    # browser instance inside its own `with` block, so a test asserting on
+    # what new_page() was called with needs it to survive that scope.
+    last_new_page_kwargs: dict[str, Any] | None = None
+
+    def new_page(self, **kwargs: Any) -> FakePage:
+        FakeBrowser.last_new_page_kwargs = kwargs
         return FakePage()
 
     def close(self) -> None:
@@ -233,6 +243,58 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(content.og_image, "https://example.com/share.webp")
         self.assertEqual(content.twitter_card, "summary_large_image")
         self.assertEqual([(image.url, image.alt) for image in content.images], [("https://example.com/decorative.svg", ""), ("https://example.com/missing.webp", None)])
+
+    def test_template_term_normalisation(self) -> None:
+        # north-melbourne-2 -> "north melbourne" is a real production case
+        # (a WordPress duplicate-slug suffix); st-kilda proves the hyphen ->
+        # space step handles a genuine multi-word suburb name; the percent-
+        # encoded/diacritic case proves steps 1 and 4 in combination.
+        self.assertEqual(_normalize_template_term("north-melbourne-2"), "north melbourne")
+        self.assertEqual(_normalize_template_term("st-kilda"), "st kilda")
+        self.assertEqual(_normalize_template_term("%C3%89tampes"), "etampes")
+        self.assertEqual(_normalize_template_term("Cost"), "cost")
+
+    def test_derive_target_terms_applies_pattern_length_and_stoplist_guards(self) -> None:
+        config = ScannerConfig(
+            template_target_patterns=[r"^/self-storage/[^/]+/(?P<term>[^/]+)/?$"],
+            # Hyphenated on purpose, matching how a config author would
+            # naturally write it (and how template_target_patterns' own
+            # "term" group is written) -- a real bug had this compared
+            # against the space-joined term and never matching.
+            template_term_stoplist=["cost", "faq", "security-options"],
+        )
+        self.assertEqual(
+            _derive_target_terms("https://example.com/self-storage/brisbane/security-options/", config), [])
+        self.assertEqual(
+            _derive_target_terms("https://example.com/self-storage/melbourne/hallam/", config), ["hallam"])
+        self.assertEqual(
+            _derive_target_terms("https://example.com/self-storage/melbourne/north-melbourne-2/", config),
+            ["north melbourne"],
+        )
+        self.assertEqual(
+            _derive_target_terms("https://example.com/self-storage/melbourne/cost/", config), [])
+        self.assertEqual(
+            _derive_target_terms("https://example.com/self-storage/melbourne/ab/", config), [])  # under 3 chars
+        self.assertEqual(_derive_target_terms("https://example.com/blog/post/", config), [])  # no pattern match
+        # Inert by default -- a general-purpose scanner must not guess.
+        self.assertEqual(
+            _derive_target_terms("https://example.com/self-storage/melbourne/hallam/", ScannerConfig()), [])
+
+    def test_depaginated_url_and_percent_encoding_normalisation(self) -> None:
+        pattern = re.compile(r"/page/(\d+)/?$")
+        # No trailing slash is added back -- fine, since the comparison this
+        # feeds (_normalized_for_comparison_decoded) strips trailing
+        # slashes on both sides anyway.
+        self.assertEqual(_depaginated_url("https://example.com/blog/page/2/", pattern), "https://example.com/blog")
+        self.assertIsNone(_depaginated_url("https://example.com/blog/", pattern))
+        # An unresolved %guide-category%-shaped template placeholder differs
+        # from its canonical only by percent-encoding depth -- normalising
+        # both sides the same way is what keeps that from misreading as a
+        # pagination bug.
+        self.assertEqual(
+            _normalized_for_comparison_decoded("https://example.com/archive/%25tpl%25/"),
+            _normalized_for_comparison_decoded("https://example.com/archive/%tpl%/"),
+        )
 
     def test_content_rules_cover_missing_long_duplicate_and_thin_pages(self) -> None:
         result = CrawlResult(start_url="https://example.com/", started_at="now")
@@ -506,6 +568,14 @@ class UnitTests(unittest.TestCase):
             browser_factory=FakePlaywright,
         )
         self.assertEqual(setup_error, "")
+        # Mobile viewport by default (matches Lighthouse's own mobile
+        # preset, so the two tools stop disagreeing about what "the page"
+        # looks like), and render_user_agent="" falls back to user_agent --
+        # fixes the split identity where the scanner used to fetch raw HTML
+        # as its configured UA but render as Playwright's own default.
+        self.assertEqual(FakeBrowser.last_new_page_kwargs["viewport"], {"width": 412, "height": 823})
+        self.assertEqual(FakeBrowser.last_new_page_kwargs["device_scale_factor"], 1.75)
+        self.assertEqual(FakeBrowser.last_new_page_kwargs["user_agent"], config.user_agent)
         self.assertEqual(len(pages), 1)
         self.assertEqual(pages[0].final_url, "https://example.com/arendered")
         self.assertEqual(pages[0].console_errors, ["Uncaught example"])
@@ -515,6 +585,17 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(pages[0].network_requests[0]["resource_type"], "script")
         self.assertEqual(pages[0].title, "Rendered title")
         self.assertEqual(pages[0].canonical_url, "https://example.com/rendered")
+
+    def test_render_viewport_and_user_agent_are_configurable(self) -> None:
+        config = ScannerConfig(
+            render_enabled=True, max_rendered_pages=1, render_settle_ms=0,
+            render_viewport_width=1280, render_viewport_height=800,
+            render_device_scale_factor=1.0, render_user_agent="custom-bot/1.0",
+        )
+        render_pages(["https://example.com/a"], config, browser_factory=FakePlaywright)
+        self.assertEqual(FakeBrowser.last_new_page_kwargs["viewport"], {"width": 1280, "height": 800})
+        self.assertEqual(FakeBrowser.last_new_page_kwargs["device_scale_factor"], 1.0)
+        self.assertEqual(FakeBrowser.last_new_page_kwargs["user_agent"], "custom-bot/1.0")
 
     def test_fetcher_only_advertises_decodable_content_encodings(self) -> None:
         fetcher = Fetcher("scanner-test", 10)
@@ -890,6 +971,22 @@ class UnitTests(unittest.TestCase):
             ScannerConfig(max_page_bytes=100, max_page_size=101)
         with self.assertRaises(ValueError):
             ScannerConfig(near_duplicate_similarity=1.1)
+
+    def test_config_validates_template_and_pagination_patterns(self) -> None:
+        with self.assertRaises(ValueError):
+            ScannerConfig(template_target_patterns=["("])  # does not compile
+        with self.assertRaises(ValueError):
+            # no "term" named group
+            ScannerConfig(template_target_patterns=[r"^/self-storage/[^/]+/([^/]+)/?$"])
+        ScannerConfig(template_target_patterns=[r"^/self-storage/[^/]+/(?P<term>[^/]+)/?$"])  # valid
+        with self.assertRaises(ValueError):
+            ScannerConfig(pagination_path_pattern="(")  # does not compile
+        with self.assertRaises(ValueError):
+            ScannerConfig(pagination_path_pattern=r"/page/?$")  # no group at all
+        with self.assertRaises(ValueError):
+            ScannerConfig(pagination_path_pattern=r"/(\w+)/page/(\d+)/?$")  # two groups
+        with self.assertRaises(ValueError):
+            ScannerConfig(render_device_scale_factor=0)
 
     def test_page_transport_rules_cover_size_speed_and_redirect_chains(self) -> None:
         response = FetchResponse(

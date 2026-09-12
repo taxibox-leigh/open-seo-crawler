@@ -58,7 +58,11 @@ def _render_page(browser: Any, url: str, config: ScannerConfig) -> RenderedPage:
     responses: list[Any] = []
     request_count = 0
     network_requests_truncated = False
-    page = browser.new_page()
+    page = browser.new_page(
+        viewport={"width": config.render_viewport_width, "height": config.render_viewport_height},
+        device_scale_factor=config.render_device_scale_factor,
+        user_agent=config.render_user_agent or config.user_agent,
+    )
 
     def on_console(message: Any) -> None:
         if message.type == "error" and len(console_errors) < config.max_render_events_per_page:
