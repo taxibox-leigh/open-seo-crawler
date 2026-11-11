@@ -31,3 +31,8 @@ ACCESS_URLS.txt
 autostart.log
 install.log
 install.ps1
+
+# Claude Code personal files: settings.local.json stores every command approved with
+# "don't ask again" verbatim, including any token typed into it. Never commit.
+**/.claude/settings.local.json
+**/CLAUDE.local.md
